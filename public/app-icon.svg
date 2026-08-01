@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Client services portal icon">
+  <rect width="512" height="512" fill="#143D59"/>
+  <rect x="112" y="96" width="288" height="320" rx="24" fill="#F8FAFC"/>
+  <rect x="152" y="152" width="208" height="24" rx="12" fill="#2A9D8F"/>
+  <rect x="152" y="216" width="176" height="20" rx="10" fill="#143D59"/>
+  <rect x="152" y="268" width="144" height="20" rx="10" fill="#143D59"/>
+  <circle cx="348" cy="348" r="52" fill="#E9C46A"/>
+  <path d="M324 348l16 16 34-38" fill="none" stroke="#143D59" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
