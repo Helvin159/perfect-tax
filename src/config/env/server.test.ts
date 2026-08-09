@@ -10,6 +10,9 @@ import {
 const validEnvironment = {
   DATABASE_URL:
     'postgresql://client_services_portal:local-only@localhost:5432/client_services_portal',
+  EMAIL_ADDRESS: 'test-user@ethereal.email',
+  EMAIL_NAME: 'Perfect Tax',
+  EMAIL_PASSWORD: 'test-email-password',
   PAYLOAD_SECRET: 'unit-test-only-not-a-secret-0123456789abcdef',
   SITE_URL: 'http://localhost:3000',
 };
@@ -29,6 +32,8 @@ describe('parseServerEnvironment', () => {
     ['PAYLOAD_SECRET', 'replace-with-output-of-openssl-rand-base64-48'],
     ['SITE_URL', 'https://example.com/configuration'],
     ['SITE_URL', 'https://user:password@example.com'],
+    ['EMAIL_ADDRESS', 'not-an-email'],
+    ['EMAIL_NAME', 'Perfect Tax\r\nBcc: attacker@example.com'],
   ] as const)('rejects an invalid %s value', (name, value) => {
     expect(() =>
       parseServerEnvironment({ ...validEnvironment, [name]: value }),
@@ -49,6 +54,9 @@ describe('parseServerEnvironment', () => {
       'DATABASE_URL is required',
       'PAYLOAD_SECRET is required',
       'SITE_URL is required',
+      'EMAIL_ADDRESS is required',
+      'EMAIL_NAME is required',
+      'EMAIL_PASSWORD is required',
     ]);
   });
 });

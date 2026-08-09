@@ -81,7 +81,7 @@ The restore command is destructive to objects already present in that local data
 
 ## Configuration Ownership
 
-Server-only configuration is `DATABASE_URL`, `PAYLOAD_SECRET`, and `SITE_URL`. Application modules access it through `getServerEnvironment()` in `src/config/env/server.ts`; the module imports `server-only`, validates values without logging them, and cannot be safely imported into a Client Component. The root Payload config uses the same parser from `src/config/env/values.ts` because the Payload CLI runs outside the Next.js runtime guard.
+Server-only configuration is `DATABASE_URL`, `PAYLOAD_SECRET`, `SITE_URL`, `EMAIL_NAME`, `EMAIL_ADDRESS`, and `EMAIL_PASSWORD`. Application modules access it through `getServerEnvironment()` in `src/config/env/server.ts`; the module imports `server-only`, validates values without logging them, and cannot be safely imported into a Client Component. The root Payload config uses the same parser from `src/config/env/values.ts` because the Payload CLI runs outside the Next.js runtime guard.
 
 Client-visible runtime configuration is empty in Phase 1. There are no `NEXT_PUBLIC_*` variables. Future browser-visible values require an exposure and data-flow review rather than re-exporting server configuration.
 
@@ -94,6 +94,14 @@ Payload `3.86.0`, `@payloadcms/next` `3.86.0`, and `@payloadcms/db-postgres` `3.
 `CmsUsers` is the only authentication-enabled collection. It is exclusively for Payload administration and has no relationship to portal, client, staff, or public identities. Anonymous reads and writes are denied. Authenticated editors, bilingual reviewers, and publishers can read and update only their own profile; only `cms-admin` users can create accounts, read all accounts, or update another account's role. No user can change their own role or delete their own active account. Login locks for 30 minutes after five failed attempts, API keys are disabled, and auth tokens are omitted from JSON responses.
 
 Payload's built-in first-user registration endpoint is blocked and its UI is replaced with bootstrap instructions. Password recovery is also blocked until a production email delivery, ownership, and recovery policy exists; this prevents Payload's development console-email adapter from logging recovery links. Additional CMS users must be created by an authenticated `cms-admin` in `/admin`.
+
+### Email Testing
+
+Payload uses its official Nodemailer adapter with explicit SMTP configuration. Local development and integration environments use [Ethereal](https://ethereal.email), which captures messages for inspection and never delivers them to real recipients. Create a reusable Ethereal account, copy `.env.example` to `.env.local`, and set `EMAIL_NAME`, `EMAIL_ADDRESS`, and `EMAIL_PASSWORD` from that account. `EMAIL_ADDRESS` is both the SMTP username and sender address. The adapter is intentionally pinned to Ethereal's `smtp.ethereal.email:587` STARTTLS endpoint so this test configuration cannot be redirected to a real mail provider through environment configuration alone.
+
+The application does not auto-create an Ethereal account because Payload's convenience mode prints the generated username and password to the process console. SMTP values are validated at startup and remain server-only. Transport verification is deferred until the first send so builds and CLI configuration loading do not depend on outbound network access. Payload email can be sent from server-side code through `payload.sendEmail(...)`; do not log credentials, reset URLs, tokens, recipient data, or message bodies.
+
+Configuring the test adapter does not enable CMS password recovery. The recovery route remains blocked until the production delivery, account-ownership, rate-limiting, monitoring, and recovery policies are approved and implemented.
 
 ### First Administrator
 

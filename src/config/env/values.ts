@@ -4,6 +4,9 @@ const PAYLOAD_SECRET_INSTRUCTION =
 
 export type ServerEnvironment = Readonly<{
   DATABASE_URL: string;
+  EMAIL_ADDRESS: string;
+  EMAIL_NAME: string;
+  EMAIL_PASSWORD: string;
   PAYLOAD_SECRET: string;
   SITE_URL: string;
 }>;
@@ -94,6 +97,34 @@ function parseSiteUrl(value: string | undefined, issues: string[]) {
   }
 }
 
+function parseEmailAddress(
+  value: string | undefined,
+  name: 'EMAIL_ADDRESS',
+  issues: string[],
+) {
+  if (!value) return undefined;
+
+  if (value.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+    issues.push(`${name} must be a valid email address`);
+  }
+
+  return value;
+}
+
+function parseEmailHeaderText(
+  value: string | undefined,
+  name: 'EMAIL_NAME',
+  issues: string[],
+) {
+  if (!value) return undefined;
+
+  if (value.length > 128 || /[\r\n]/.test(value)) {
+    issues.push(`${name} must be at most 128 characters without line breaks`);
+  }
+
+  return value;
+}
+
 export function parseServerEnvironment(
   source: EnvironmentSource,
 ): ServerEnvironment {
@@ -110,6 +141,17 @@ export function parseServerEnvironment(
     readRequired(source, 'SITE_URL', issues),
     issues,
   );
+  const emailAddress = parseEmailAddress(
+    readRequired(source, 'EMAIL_ADDRESS', issues),
+    'EMAIL_ADDRESS',
+    issues,
+  );
+  const emailName = parseEmailHeaderText(
+    readRequired(source, 'EMAIL_NAME', issues),
+    'EMAIL_NAME',
+    issues,
+  );
+  const emailPassword = readRequired(source, 'EMAIL_PASSWORD', issues);
 
   if (issues.length > 0) {
     throw new ServerEnvironmentError(issues);
@@ -117,11 +159,21 @@ export function parseServerEnvironment(
 
   return Object.freeze({
     DATABASE_URL: databaseUrl!,
+    EMAIL_ADDRESS: emailAddress!,
+    EMAIL_NAME: emailName!,
+    EMAIL_PASSWORD: emailPassword!,
     PAYLOAD_SECRET: payloadSecret!,
     SITE_URL: siteUrl!,
   });
 }
 
 export function getServerEnvironment() {
-  return parseServerEnvironment(process.env);
+  return parseServerEnvironment({
+    DATABASE_URL: process.env.DATABASE_URL,
+    EMAIL_ADDRESS: process.env.EMAIL_ADDRESS,
+    EMAIL_NAME: process.env.EMAIL_NAME,
+    EMAIL_PASSWORD: process.env.EMAIL_PASSWORD,
+    PAYLOAD_SECRET: process.env.PAYLOAD_SECRET,
+    SITE_URL: process.env.SITE_URL,
+  });
 }

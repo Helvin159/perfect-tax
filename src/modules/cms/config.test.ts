@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { SanitizedConfig } from 'payload';
+import type { EmailAdapter, SanitizedConfig } from 'payload';
 
 let config: SanitizedConfig;
 let databaseSchemaPush: boolean;
@@ -16,6 +16,9 @@ describe('Payload configuration', () => {
       'configuration-test-only-secret-0123456789abcdef',
     );
     vi.stubEnv('SITE_URL', 'http://localhost:3000');
+    vi.stubEnv('EMAIL_ADDRESS', 'configuration-test@ethereal.email');
+    vi.stubEnv('EMAIL_NAME', 'Perfect Tax');
+    vi.stubEnv('EMAIL_PASSWORD', 'configuration-test-email-password');
 
     const configModule = await import('../../../payload.config');
     config = await configModule.default;
@@ -43,6 +46,17 @@ describe('Payload configuration', () => {
     expect(config.db.name).toBe('postgres');
     expect(databaseSchemaPush).toBe(false);
     expect(config.typescript.autoGenerate).toBe(false);
+  });
+
+  it('uses the Nodemailer SMTP adapter with the configured sender', async () => {
+    const adapter = await (config.email as unknown as Promise<EmailAdapter>);
+    const email = adapter({ payload: {} as never });
+
+    expect(email).toMatchObject({
+      defaultFromAddress: 'configuration-test@ethereal.email',
+      defaultFromName: 'Perfect Tax',
+      name: 'nodemailer',
+    });
   });
 
   it('enables lockout behavior for CmsUsers', () => {

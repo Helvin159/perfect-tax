@@ -32,6 +32,7 @@
   },
   "dependencies": {
     "@payloadcms/db-postgres": "3.86.0",
+    "@payloadcms/email-nodemailer": "3.86.0",
     "@payloadcms/next": "3.86.0",
     "clsx": "2.1.1",
     "next": "16.2.10",
@@ -51,9 +52,9 @@
     "@types/react-dom": "19.2.3",
     "eslint": "9.39.5",
     "eslint-config-next": "16.2.10",
+    "pg": "8.20.0",
     "postcss": "8.5.19",
     "prettier": "3.9.5",
-    "pg": "8.20.0",
     "tailwindcss": "4.3.3",
     "tsx": "4.20.6",
     "typescript": "6.0.3",

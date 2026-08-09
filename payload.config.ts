@@ -1,6 +1,7 @@
 import path from 'node:path';
 
 import { postgresAdapter } from '@payloadcms/db-postgres';
+import { nodemailerAdapter } from '@payloadcms/email-nodemailer';
 import { buildConfig } from 'payload';
 
 import { getServerEnvironment } from './src/config/env/values';
@@ -35,6 +36,20 @@ export default buildConfig({
       connectionString: environment.DATABASE_URL,
     },
     push: PAYLOAD_DATABASE_SCHEMA_PUSH,
+  }),
+  email: nodemailerAdapter({
+    defaultFromAddress: environment.EMAIL_ADDRESS,
+    defaultFromName: environment.EMAIL_NAME,
+    skipVerify: true,
+    transportOptions: {
+      auth: {
+        pass: environment.EMAIL_PASSWORD,
+        user: environment.EMAIL_ADDRESS,
+      },
+      host: 'smtp.ethereal.email',
+      port: 587,
+      secure: false,
+    },
   }),
   graphQL: {
     disable: true,
