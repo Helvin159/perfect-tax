@@ -170,13 +170,15 @@ Agents implementing Slice 1 must encode all of the following:
 3. Each token is bound to one immutable canonical principal. Every access helper exact-matches the full narrow user projection to that bound principal before evaluating roles or ownership.
 4. `PortalPayloadUser.collection` is an explicit portal-only discriminator and must never be omitted, `cms-users`, or derived from email. Access code must reject all other discriminators.
 5. The capability token is the value of an enumerable string-keyed request-context slot. Do not attest the context object, use a symbol-only slot, serialize the token, or treat the property name as a secret.
-6. Every user-driven Payload call explicitly sets `overrideAccess: false`, `user`, `context`, `depth: 0`, and a narrow `select`. A typed gateway wrapper should make omission unrepresentable and should not expose an `overrideAccess` parameter.
-7. Hooks and nested Local API calls pass the same `req`. Critical hooks independently resolve attestation and fail closed; they do not trust `overrideAccess`, role strings, IDs, or mutable document data.
-8. Relationship fields, joins, `populate`, and `depth > 0` are denied by convention until individually reviewed and tested. Raw relationship ID disclosure must be considered explicitly.
-9. Portal policies never accept `cms-users`; CMS policies never accept portal principals. Neither side links identities by email.
-10. Normal and system gateways are separate modules and capabilities. The normal gateway cannot request bypass. A system gateway uses a different private allowlisted capability, requires a nonempty reason and audit event, exposes only named operations, and is never callable from user-controlled routes without separate authorization.
-11. `owner` does not grant Better Auth provider administration. The Better Auth Admin plugin remains disabled.
-12. Any Payload, Better Auth, relationship policy, context construction, nested-operation, or transaction behavior change requires regression tests; a Payload upgrade requires this disposable proof to be rerun.
+6. Every user-driven Payload call explicitly sets `overrideAccess: false`, `user`, `context`, `depth: 0`, and a narrow `select`. A typed gateway wrapper must make omission unrepresentable and must not expose `overrideAccess`, `req`, `depth`, `populate`, or joins as caller-controlled parameters.
+7. Hooks and nested Local API calls pass the same `req` only within the same immutable principal and transaction. Critical hooks independently resolve attestation and fail closed; they do not trust `overrideAccess`, role strings, IDs, or mutable document data. A `beforeDelete` hook must independently authorize the target resource before any side effect because Payload runs it before proving a query access constraint against the target document.
+8. A top-level gateway call always lets Payload create a fresh request. A `PayloadRequest`, its context, and its DataLoader are never cached or reused across principals. Cross-principal request reuse can leak a relationship document already cached under a more privileged principal.
+9. Relationship fields, joins, `populate`, and `depth > 0` are denied by convention until individually reviewed and tested. Raw relationship ID disclosure must be considered explicitly.
+10. Portal policies never accept `cms-users`; CMS policies never accept portal principals. Neither side links identities by email.
+11. A `staff-enrollment` principal is never accepted by the operational Payload data gateway. It remains limited to the frozen `enroll-mfa`, `verify-mfa`, and `sign-out` boundary until it is replaced by a newly resolved active, MFA-verified Staff principal.
+12. Normal and system gateways are separate modules and capabilities. The normal gateway cannot request bypass. A system gateway uses a different private allowlisted capability, requires a nonempty reason and audit event, exposes only named operations, and is never callable from user-controlled routes without separate authorization.
+13. `owner` does not grant Better Auth provider administration. The Better Auth Admin plugin remains disabled.
+14. Any Payload, Better Auth, relationship policy, context construction, nested-operation, transaction, or DataLoader behavior change requires regression tests; a Payload upgrade requires this disposable proof to be rerun.
 
 ### Security invariant disposition
 
@@ -194,6 +196,25 @@ Agents implementing Slice 1 must encode all of the following:
 | AUTH-BRIDGE-010 | Pass                 | JSON reconstruction lost token identity and was denied.                                                                 |
 
 **Slice 1 is approved to proceed with this exact constrained architecture.** This is an approval of a contract, not permission to generalize caller-supplied Payload users or context as trusted.
+
+### 2026-08-10 merged-branch revalidation
+
+The gate was rerun after the ADR and Agent 2 domain contracts were merged. The revalidation baseline was branch `user-structure`, commit `c1024527c0375e5482285a611ce12d83521e0428`, with a clean worktree. It used Node.js `24.18.0`, Payload and PostgreSQL adapter `3.86.0`, and a disposable `postgres:17.10-bookworm` database. Better Auth remains intentionally absent from production dependencies; the selected and previously compatibility-proven version remains `1.6.23`.
+
+The proof lived at `/tmp/payload-bridge-proof-agent1-20260810` and was not added to production source. It repeated `find`, `findByID`, `create`, `update`, `delete`, collection access, field access, hooks, nested reads, nested audit writes, relationship population, transaction propagation, CMS crossover denials, `createLocalReq` cloning behavior, and all nine required forgery attacks. The positive and forgery results reproduced the earlier gate: all legitimate scenarios passed and every fake user, fake role, fake Client ID, fake context, reconstructed value, mismatch, missing half, and direct attacker-created Local API call was denied with `Forbidden`.
+
+The revalidation also added two adversarial probes:
+
+| Probe                                                                                               | Observed result                                                                                                                                    | Required response                                                                                                                                                                                                         |
+| --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reuse one `PayloadRequest` first as Staff and then as Client while populating the same relationship | The Client call received the relationship document already cached by the Staff call. The DataLoader cache did not rerun related collection access. | The gateway must create a fresh top-level request per immutable principal, never accept `req` from callers, and never reuse a request or DataLoader across principals. `depth: 0` and narrow `select` remain the default. |
+| Inspect constrained delete ordering                                                                 | Collection delete access runs first, but `beforeDelete` runs before Payload looks up the target under the returned query constraint.               | A side-effecting delete hook must load and authorize resource evidence independently before acting. Attestation proves the caller identity, not target ownership.                                                         |
+
+The first behavior follows from the request-scoped DataLoader implementation: relationship cache keys carry collection, document, depth, transaction, and access mode, but not the opaque capability or full principal. The second follows from the installed `deleteByID` operation order. These are not reasons to reject the bridge because the gateway can make cross-principal request reuse unrepresentable and critical hooks can enforce resource authorization independently. They are mandatory limitations of the approval, not optional hardening.
+
+The merged provider-independent principal contract now includes `staff-enrollment` in addition to Staff and Client. That principal is intentionally incapable of operational Payload data access: its only allowed operations are MFA enrollment, MFA verification, and sign-out. Agent 10 must reject it before issuing gateway arguments; Agent 11 may replace it with a fully resolved Staff principal only after active Staff status and verified MFA are re-established.
+
+The 2026-08-10 revalidation therefore preserves the **Approve** decision, with the expanded mandatory contract above. AUTH-BRIDGE-006 remains a pass only for fresh requests and reviewed relationship exposure; deliberate cross-principal request reuse is proven unsafe and prohibited.
 
 ## Tested compatibility matrix
 
