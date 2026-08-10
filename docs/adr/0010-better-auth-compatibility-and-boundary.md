@@ -3,6 +3,7 @@
 - Status: Accepted for Slice 1 identity work, with mandatory bridge constraints
 - Decision date: 2026-07-18
 - Bridge gate date: 2026-08-09
+- Staff session policy date: 2026-08-10
 - Scope: Phase 1 Task 10 compatibility research plus Slice 1 authorization-bridge gate
 - Tested Better Auth version: `1.6.23`
 - Tested Payload version: `3.86.0`
@@ -352,7 +353,28 @@ Initial sessions remain database-backed with cookie caching disabled so suspensi
 
 Production cookies are host-only, `HttpOnly`, `Secure`, `SameSite=Lax`, and `Path=/`; no `Domain` attribute and no cross-subdomain sharing. Configure a neutral application cookie prefix and force secure cookies instead of relying only on `NODE_ENV`. Cookie lifetime must match an explicitly configured session lifetime; do not inherit the seven-day default silently. `SameSite=None`, third-party cookies, and a separate auth domain are prohibited without a new cross-site threat review. TLS is mandatory.
 
-The exact session lifetime and reauthentication interval remain a Phase 2 security/product decision. Staff and administrator sensitive operations require a fresh, MFA-verified session regardless of the general client session lifetime.
+### Operational Staff session policy
+
+The following Slice 1 Staff policy is approved for the Better Auth `1.6.23` boundary:
+
+```text
+Operational Staff session lifetime:
+28,800 seconds / 8 hours
+
+Session refresh:
+disabled; eight-hour maximum session lifetime
+
+Fresh-session interval:
+900 seconds / 15 minutes
+```
+
+Configure `expiresIn = 28_800` and `disableSessionRefresh = true`. An authenticated operational Staff session cannot remain valid beyond eight hours merely because the user continues making requests. Do not replace this absolute lifetime with Better Auth's default seven-day sliding session. A different refresh configuration is permissible only if the exact approved Better Auth `1.6.23` compatibility proof demonstrates that it is required to preserve the same eight-hour absolute-session property.
+
+For a Slice 1 operation classified as security-sensitive, enforce `freshAge = 900`. A valid Staff session older than 15 minutes may continue ordinary authorized work but must satisfy the application's fresh-session requirement before the sensitive operation. Keep this contract available cleanly for later consumers, such as Staff privilege or role changes, account-security or login-email changes, and recovery configuration, without broadening Slice 1 to implement those future operations.
+
+MFA verification and session freshness are separate security properties. A Staff principal may have valid MFA assurance and a valid eight-hour session while failing the 15-minute freshness requirement; neither property implies the other.
+
+Slice 1 provisions no Client portal credentials and establishes no Client-session lifetime. That policy remains for Client activation in Slice 2 unless separately superseded by accepted architecture.
 
 ### Origin and CSRF policy
 
@@ -427,7 +449,7 @@ Rollback disables the custom strategy, revokes Better Auth-derived Payload sessi
 All items are mandatory before adding Better Auth to the application:
 
 1. Business owners approve public versus invite-only client registration, portal staff roles, administrator provisioning, suspension, deletion, privacy, retention, and support recovery policies.
-2. Security owners approve explicit session lifetime, fresh-session interval, cookie policy, exact production/staging origins, trusted proxy behavior, rate-limit storage, and audit requirements.
+2. The approved operational Staff values—`expiresIn = 28_800`, `disableSessionRefresh = true`, and `freshAge = 900`—are encoded and tested while preserving separate MFA and freshness checks. Security owners approve the remaining cookie policy, exact production/staging origins, trusted proxy behavior, rate-limit storage, and audit requirements.
 3. A transactional email provider and verified domain are operational with SPF/DKIM/DMARC, English/Spanish templates, monitoring, and secret management.
 4. Staff/administrator TOTP enrollment, backup-code handling, lost-factor recovery, step-up rules, and break-glass ownership are approved and testable.
 5. PostgreSQL roles and the `portal_auth` and `portal_identity` schemas are designed with least privilege; Payload, Better Auth, and application migrations have separate directories, ledgers, locks, and deployment/rollback procedures.
@@ -442,7 +464,7 @@ All items are mandatory before adding Better Auth to the application:
 
 - The business has not yet selected public versus invite-only client registration or approved portal role ownership.
 - Transactional email provider, sender-domain controls, delivery monitoring, bilingual templates, and support recovery procedures are undecided.
-- Session lifetime, reauthentication interval, distributed rate-limit storage, trusted-device use, and proxy-header ownership need threat-model approval.
+- Distributed rate-limit storage, trusted-device use, and proxy-header ownership need threat-model approval.
 - Better Auth's direct Kysely `migrate` reconciles live state without the migration ledger observed in Payload; the proposed reviewed-SQL ledger and rollback workflow still needs implementation proof.
 - Admin and two-factor plugins were schema-inspected but their complete runtime flows, recovery edge cases, and role-escalation controls were not production-validated.
 - TOTP is not phishing-resistant. Passkeys/WebAuthn, device loss, and staff break-glass recovery remain future decisions.
