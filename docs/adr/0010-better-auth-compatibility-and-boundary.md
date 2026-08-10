@@ -1,15 +1,199 @@
-# ADR 0010: Better Auth compatibility and portal identity boundary
+# ADR 0010: Better Auth compatibility, portal identity boundary, and Payload bridge gate
 
-- Status: Accepted for Phase 2 entry, with prerequisites
+- Status: Accepted for Slice 1 identity work, with mandatory bridge constraints
 - Decision date: 2026-07-18
-- Scope: Phase 1 Task 10 research and disposable proof only
+- Bridge gate date: 2026-08-09
+- Scope: Phase 1 Task 10 compatibility research plus Slice 1 authorization-bridge gate
 - Tested Better Auth version: `1.6.23`
+- Tested Payload version: `3.86.0`
 
 ## Decision
 
 **Go**, conditionally, with Better Auth `1.6.23` as the Phase 2 portal-authentication candidate. The spike proved that this exact release installs, typechecks, builds, migrates, rejects an untrusted-origin mutation, and reads a server-side session with the repository's pinned stack.
 
 This is not approval to add production authentication in Phase 1. Better Auth remains absent from the application until every Phase 2 entry criterion below is met. A dependency update requires a fresh compatibility and migration review; `1.6.23` is evidence, not a floating-version approval.
+
+## 2026-08-09 Payload authorization-bridge gate
+
+### Gate decision
+
+**Approve** the attested-principal bridge for Slice 1, subject to every mandatory convention in this addendum. Payload `3.86.0` can execute Local API operations with `overrideAccess: false` for a Better Auth-derived operational principal without making that principal a `cms-users` record or changing Payload Admin authentication.
+
+The trusted value is not the caller-supplied `user`, its role, its IDs, the context property name, or any TypeScript shape. The trusted value is a module-private, runtime-issued opaque object held in a private `WeakMap` and bound to the canonical principal resolved from a server-validated Better Auth session. Access functions accept a call only when the opaque token is recognized and the complete narrow `PortalPayloadUser` projection exactly matches the principal bound to that token.
+
+This approval does not extend to arbitrary implementations using `WeakSet`, `WeakMap`, symbols, or request context. Two tempting variants failed the propagation probe:
+
+- attesting the `req.context` container itself is unsafe because Payload may shallow-clone that container; and
+- storing the only capability under a symbol key is unsafe because a nested Local API call can replace a symbol-only context with `{}` after testing it with `Object.keys`.
+
+The proven representation is an opaque frozen token stored as the value of an enumerable string-keyed context property. The property name is not secret and grants no authority. Object identity of the token is the runtime capability.
+
+### Repository baseline reviewed
+
+The gate was run on branch `feat/agent-1` at commit `3ee79675f6b557abd9553d2079b319999eb22bea`. The worktree was clean before the proof. The review covered:
+
+- `payload.config.ts`, including `admin.user: 'cms-users'`, `/admin`, `/api/cms`, schema push disabled, and the existing Nodemailer/Ethereal adapter;
+- `src/modules/cms/users/**`, including the CMS-only collection discriminator and editorial roles;
+- CMS access functions, CMS bootstrap authorization hook, and the one existing explicitly privileged CMS bootstrap path;
+- content access, editorial workflow policy and hooks, public projection policy, and all current Local API call sites;
+- the committed Payload migrations and migration tests;
+- ADR 0010 and ADR 0011;
+- current tests and dependency state; and
+- the absence of Better Auth packages, routes, schemas, cookies, and runtime code from the production application.
+
+No Staff, Client, PortalIdentity, operational authorization, Better Auth, route, migration, generated type, CMS workflow, or email-adapter production code was changed for this gate.
+
+### Exact Payload behavior established
+
+Installed Payload `3.86.0` behaves as follows:
+
+1. Every tested Local API wrapper defaults `overrideAccess` to `true`; the portal gateway must therefore set `overrideAccess: false` explicitly on every user-driven call.
+2. `createLocalReq` assigns the supplied `user` directly when it has a `collection` property. It does not require that collection to exist or be authentication-enabled.
+3. If a supplied user lacks `collection`, Payload clones it and silently assigns `payload.config.admin.user`. In this repository that would be `cms-users`. Operational callers must always use an explicit non-CMS collection discriminator, and access functions must exact-match it to the attested principal.
+4. `createLocalReq` shallow-merges `req.context` and Local API `context`. It does not serialize the values. An opaque nested token therefore retains object identity across the proven operations.
+5. Collection access is executed through `executeAccess` only when `overrideAccess` is false. `false` denies; a query constraint is combined with the caller query.
+6. Field read access receives the same `req`, including `req.user` and `req.context`, and removes a denied field from the returned document.
+7. Collection hooks receive `context: req.context` and the same request. The proof asserted reference equality in `beforeChange`, `afterChange`, `beforeDelete`, and a nested audit hook.
+8. Relationship population uses the request-scoped DataLoader and performs a nested `payload.find` with the same `req` and inherited `overrideAccess`. Related collection access therefore runs. When related access returns no document, Payload leaves the relationship ID instead of populated fields.
+9. Nested hook operations preserve the opaque token and narrow user only when the same `req` is passed. This is mandatory.
+10. Transactional create, update, delete, and nested operations use `req.transactionID`. The proof observed the same transaction UUID in parent hooks, nested access, and nested hooks.
+11. Payload clones document `data` for create/update, but the proof observed no serialization or cloning of the opaque token value or the explicit user object in the accepted path.
+12. Caller-controlled context reaches hooks by design, but remains untrusted because no lookalike token exists in the module-private capability registry.
+
+Relevant installed implementation locations are:
+
+- `node_modules/payload/dist/utilities/createLocalReq.js:4-20,65-107`;
+- `node_modules/payload/dist/collections/operations/local/find.js:4-29` and the equivalent create/update/delete wrappers;
+- `node_modules/payload/dist/auth/executeAccess.js:2-23`;
+- `node_modules/payload/dist/collections/operations/find.js:43-74,205-272`;
+- `node_modules/payload/dist/fields/hooks/afterRead/promise.js:223-264`;
+- `node_modules/payload/dist/fields/hooks/afterRead/relationshipPopulationPromise.js:4-49,84-197`;
+- `node_modules/payload/dist/collections/dataloader.js:9-115`;
+- `node_modules/payload/dist/collections/operations/create.js:23-32,68-75,93-149,244-303,323-329`; and
+- `node_modules/payload/dist/utilities/initTransaction.js:1-25`.
+
+These are version-specific implementation facts, not API guarantees for later Payload releases. A Payload upgrade requires this gate to be rerun.
+
+### Disposable experiments
+
+The proof lived only at `/tmp/payload-bridge-proof-agent1` and used an isolated `postgres:17.10-bookworm` container bound to `127.0.0.1:55433`. Its minimal collections modeled a CMS identity, CMS-only editorial data, Clients, client-owned records, relationships, protected fields, and nested audit writes. The operational `user.collection` was deliberately `portal-principals`, a slug that was not a configured or authentication-enabled collection.
+
+The tested architecture was:
+
+```text
+server-validated Better Auth session
+        |
+        v
+module-private principal resolver
+        |
+        +-- frozen narrow PortalPayloadUser (explicit portal-principals discriminator)
+        |
+        +-- frozen opaque token -> private WeakMap -> canonical principal
+                                   |
+                                   v
+               enumerable req.context capability slot
+                                   |
+                                   v
+PortalPayloadGateway -> Payload Local API -> overrideAccess: false
+                                   |
+                                   v
+          collection access + field access + invariant hooks
+```
+
+The normal proof covered `find`, `findByID`, `create`, `update`, `delete`, field access, authorized and unauthorized relationship resolution, collection hooks, nested reads, nested writes, and PostgreSQL transactions. A focused `createLocalReq` probe covered context cloning, symbol-only loss, opaque token preservation, and missing-collection relabeling.
+
+### Positive results
+
+| Scenario                                             | Result                                                                                                                                         |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Owner-like Staff `find` with `overrideAccess: false` | Pass; three records returned and collection/field access ran.                                                                                  |
+| Client `find`                                        | Pass; only the two records owned by that Client returned.                                                                                      |
+| Client `findByID`                                    | Pass; own record returned with protected field.                                                                                                |
+| Owner-like Staff `create`                            | Pass; collection access, invariant hook, nested read, field access, after-change hook, and nested audit create all received valid attestation. |
+| Owner-like Staff `update`                            | Pass with the same controls and nested operations.                                                                                             |
+| Owner-like Staff `delete`                            | Pass; delete access and `beforeDelete` received valid attestation.                                                                             |
+| Staff/Client distinction                             | Pass; the same collection policy returned all records to Staff and an ownership constraint to Client.                                          |
+| Non-Payload operational identity                     | Pass; `portal-principals` was not a configured collection and was not auth-enabled.                                                            |
+| Authorized relationship                              | Pass; Client A's related Client A record populated and field access ran.                                                                       |
+| Nested transaction propagation                       | Pass; parent and nested operations shared the same transaction ID.                                                                             |
+
+### Forgery results
+
+| Attack                                                                  | Expected | Actual      | Result |
+| ----------------------------------------------------------------------- | -------- | ----------- | ------ |
+| Lookalike operational user                                              | Deny     | `Forbidden` | Pass   |
+| Caller-supplied `role: owner`                                           | Deny     | `Forbidden` | Pass   |
+| Caller-supplied Client ID                                               | Deny     | `Forbidden` | Pass   |
+| Lookalike context fields and token object                               | Deny     | `Forbidden` | Pass   |
+| JSON-serialized/deserialized valid-looking principal, user, and context | Deny     | `Forbidden` | Pass   |
+| Owner user paired with Client B capability                              | Deny     | `Forbidden` | Pass   |
+| Valid expected user without context                                     | Deny     | `Forbidden` | Pass   |
+| Valid capability context without user                                   | Deny     | `Forbidden` | Pass   |
+| Direct Local API update with attacker-created inputs                    | Deny     | `Forbidden` | Pass   |
+
+Serialization produced a new plain token object that was absent from the private `WeakMap`; matching fields did not help. The mismatch test failed because the complete user projection did not match the principal bound to the genuine token. Missing halves failed closed.
+
+### Relationship finding and limitation
+
+Payload did not populate unauthorized Client B fields through a Client A-readable parent. It reran Client access with the propagated attestation, received no related document, and returned the raw Client B relationship ID. The ID behavior is explicit in the installed relationship population implementation.
+
+Therefore `depth: 0` is mandatory by default, but it is not by itself a policy for whether a stored relationship ID may be disclosed: depth zero also returns the ID. Portal collection and field policies must prevent unauthorized references from being readable, or the gateway must exclude the relationship field with `select`. Any `depth > 0`, `populate`, join, or relationship field exposed to a portal response requires an explicit authorization and data-disclosure review plus a regression test.
+
+### CMS isolation
+
+The bridge requires none of the following: changing `admin.user`, replacing `cms-users`, changing CMS cookies, adding Better Auth to `/api/cms`, mapping CMS roles to portal roles, or changing editorial hooks and public content projection.
+
+The disposable proof preserved a separate auth-enabled CMS collection and showed both directions of denial: the CMS administrator retained CMS editorial read access but had no portal access without a runtime capability, and the attested portal owner had no CMS editorial access because its explicit collection discriminator was not the CMS collection. Repository access helpers additionally require `collection === 'cms-users'` and an allowlisted editorial role. Matching email is not part of either decision.
+
+The Local API's ability to accept a caller-supplied user is unrelated to HTTP authentication for Payload Admin or `/api/cms`. Payload's HTTP auth operation sets `req.user` only from configured authentication strategies. The portal gateway must remain server-only and must never attach its principal to an incoming `/api/cms` request.
+
+### Better Auth boundary revalidation
+
+The bridge relies only on the server-side session validation already proven for Better Auth `1.6.23` in the disposable compatibility spike recorded below. The expected session supplies an immutable Better Auth user ID and server-validated session/account state; the resolver then loads application-owned PortalIdentity/Staff/Client facts and issues the runtime capability. No raw session, role, Staff ID, Client ID, assignment ID, or reconstructed principal from a browser may enter the gateway as authority.
+
+The bridge does not require the Better Auth Admin plugin, provider-administrator authority, impersonation, or Better Auth role fields. Application `owner` is an application authorization role only and never implies Better Auth administrator. The previously generated Admin-plugin schema remains informational and must not be enabled for Slice 1.
+
+### Architectures considered
+
+| Candidate                                                        | Decision                    | Reason                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------------------------------------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Attested Local API principal and context                         | Selected                    | Preserves Payload collection/field defense-in-depth, requires no operational Payload auth collection, and passed all positive and forgery tests.                                                                                                                                                                                                   |
+| Payload custom authentication strategy                           | Rejected for Slice 1        | Payload supports per-auth-collection strategies, so a separate collection may be isolatable, but it would add a second Payload authentication domain and couple Better Auth to Payload HTTP auth without solving a need demonstrated by the proof. Adding a strategy to `cms-users` is prohibited because it would influence Admin and `/api/cms`. |
+| Application authorization gateway plus privileged Payload bypass | Rejected as the normal path | It can work, but makes application authorization the sole normal boundary and loses Payload access-control defense-in-depth. Reserve it only for narrowly reviewed system operations.                                                                                                                                                              |
+
+### Mandatory downstream contract
+
+Agents implementing Slice 1 must encode all of the following:
+
+1. A server-only resolver validates the Better Auth session and loads canonical application identity and authorization facts. It accepts no browser-supplied principal fields.
+2. Only that resolver/gateway module can issue opaque tokens. The private registry and issuance function are not exported to feature or client code.
+3. Each token is bound to one immutable canonical principal. Every access helper exact-matches the full narrow user projection to that bound principal before evaluating roles or ownership.
+4. `PortalPayloadUser.collection` is an explicit portal-only discriminator and must never be omitted, `cms-users`, or derived from email. Access code must reject all other discriminators.
+5. The capability token is the value of an enumerable string-keyed request-context slot. Do not attest the context object, use a symbol-only slot, serialize the token, or treat the property name as a secret.
+6. Every user-driven Payload call explicitly sets `overrideAccess: false`, `user`, `context`, `depth: 0`, and a narrow `select`. A typed gateway wrapper should make omission unrepresentable and should not expose an `overrideAccess` parameter.
+7. Hooks and nested Local API calls pass the same `req`. Critical hooks independently resolve attestation and fail closed; they do not trust `overrideAccess`, role strings, IDs, or mutable document data.
+8. Relationship fields, joins, `populate`, and `depth > 0` are denied by convention until individually reviewed and tested. Raw relationship ID disclosure must be considered explicitly.
+9. Portal policies never accept `cms-users`; CMS policies never accept portal principals. Neither side links identities by email.
+10. Normal and system gateways are separate modules and capabilities. The normal gateway cannot request bypass. A system gateway uses a different private allowlisted capability, requires a nonempty reason and audit event, exposes only named operations, and is never callable from user-controlled routes without separate authorization.
+11. `owner` does not grant Better Auth provider administration. The Better Auth Admin plugin remains disabled.
+12. Any Payload, Better Auth, relationship policy, context construction, nested-operation, or transaction behavior change requires regression tests; a Payload upgrade requires this disposable proof to be rerun.
+
+### Security invariant disposition
+
+| Invariant       | Result               | Evidence                                                                                                                |
+| --------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| AUTH-BRIDGE-001 | Pass                 | Fake user, role, Client ID, context, and direct calls were denied.                                                      |
+| AUTH-BRIDGE-002 | Pass                 | All normal operations ran collection access only with explicit `overrideAccess: false`; attacks threw `Forbidden`.      |
+| AUTH-BRIDGE-003 | Pass                 | Staff received boolean access; Client received an ownership constraint from the attested principal.                     |
+| AUTH-BRIDGE-004 | Pass                 | Protected field access received the same attested request and removed fields when untrusted.                            |
+| AUTH-BRIDGE-005 | Pass                 | Hooks reference-checked context, resolved attestation independently, and performed nested invariant reads.              |
+| AUTH-BRIDGE-006 | Pass with limitation | Unauthorized related fields did not populate; raw relationship IDs remain visible and require `select`/policy controls. |
+| AUTH-BRIDGE-007 | Pass                 | Both isolation directions were denied; CMS access remained functional and configuration need not change.                |
+| AUTH-BRIDGE-008 | Pass                 | No Better Auth Admin plugin or provider-admin authority is involved.                                                    |
+| AUTH-BRIDGE-009 | Pass                 | Separate runtime capability namespaces proved normal and reason-bearing system paths are viable.                        |
+| AUTH-BRIDGE-010 | Pass                 | JSON reconstruction lost token identity and was denied.                                                                 |
+
+**Slice 1 is approved to proceed with this exact constrained architecture.** This is an approval of a contract, not permission to generalize caller-supplied Payload users or context as trusted.
 
 ## Tested compatibility matrix
 
@@ -185,7 +369,7 @@ Better Auth's user profile owns the canonical authenticated preference as a vali
 
 ### Suspension, deletion, and audit behavior
 
-Use the Admin plugin's ban capability for suspension because it prevents sign-in and revokes existing sessions. Every authorization path must also fail closed on suspended state. Suspension propagates to application access and any CMS link, while client records and audit history remain intact.
+The earlier Phase 2 candidate of using the Admin plugin's ban capability is superseded for Slice 1. The Admin plugin is not enabled. Slice 1 keeps suspension state in the application identity boundary, makes the server-only resolver fail closed on that state, and must separately prove the selected core-session revocation procedure before launch. Enabling the Admin plugin later would require a new schema, privilege, and migration decision; its provider roles could never be inferred from application `owner` or administrator roles.
 
 Account deletion is an application workflow, not a raw cascade initiated from the browser. It revokes sessions, disables links, records an immutable audit event, detaches credentials from the durable domain subject, and then deletes or anonymizes identity data according to the approved legal retention policy. It must never cascade-delete client service, tax, document, CMS, or audit records. A deleted or missing Better Auth identity fails closed for portal and linked CMS access.
 
