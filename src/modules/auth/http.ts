@@ -4,8 +4,15 @@ import {
   isPortalAuthHttpOperation,
   PORTAL_AUTH_BASE_PATH,
 } from './config/policy';
+import {
+  handleStaffMfaHttpRequest,
+  isStaffMfaHttpPath,
+  type StaffMfaHttpBoundaryOptions,
+} from './mfa-http';
 
 type AuthHandler = Readonly<{
+  $context: Parameters<typeof handleStaffMfaHttpRequest>[0]['$context'];
+  api: Parameters<typeof handleStaffMfaHttpRequest>[0]['api'];
   handler(request: Request): Promise<Response>;
 }>;
 
@@ -19,7 +26,10 @@ function getPortalAuthRelativePath(request: Request) {
  * Fail-closed HTTP surface. Better Auth has more core endpoints than Slice 1
  * permits; they remain unreachable even if a library default changes.
  */
-export function createPortalAuthHttpHandler(auth: AuthHandler) {
+export function createPortalAuthHttpHandler(
+  auth: AuthHandler,
+  options: StaffMfaHttpBoundaryOptions = {},
+) {
   return async function handlePortalAuthRequest(request: Request) {
     const relativePath = getPortalAuthRelativePath(request);
 
@@ -28,6 +38,10 @@ export function createPortalAuthHttpHandler(auth: AuthHandler) {
       !isPortalAuthHttpOperation(request.method, relativePath)
     ) {
       return new Response('Not Found', { status: 404 });
+    }
+
+    if (isStaffMfaHttpPath(relativePath)) {
+      return handleStaffMfaHttpRequest(auth, request, relativePath, options);
     }
 
     return auth.handler(request);

@@ -26,6 +26,9 @@ export const PORTAL_AUTH_HTTP_OPERATIONS = Object.freeze([
   'POST /revoke-session',
   'POST /revoke-sessions',
   'POST /revoke-other-sessions',
+  'POST /two-factor/enable',
+  'POST /two-factor/verify-totp',
+  'POST /two-factor/verify-backup-code',
 ] as const);
 
 const portalAuthHttpOperationSet = new Set<string>(PORTAL_AUTH_HTTP_OPERATIONS);

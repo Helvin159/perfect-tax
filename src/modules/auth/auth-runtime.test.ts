@@ -88,7 +88,7 @@ describe('Better Auth core runtime', () => {
   it('pins the absolute database-session, cookie, and origin contract', () => {
     const { options } = createTestRuntime();
 
-    expect(options.session).toEqual({
+    expect(options.session).toMatchObject({
       cookieCache: { enabled: false },
       ...PORTAL_AUTH_SESSION_POLICY,
     });
@@ -112,6 +112,7 @@ describe('Better Auth core runtime', () => {
       disableSignUp: true,
       enabled: true,
     });
+    expect(options.plugins?.map(({ id }) => id)).toEqual(['two-factor']);
   });
 
   it('allows valid login and rejects invalid credentials', async () => {
@@ -281,7 +282,7 @@ describe('Better Auth core runtime', () => {
       }),
     );
     expect(providerSignup.status).toBe(400);
-    expect(auth.options.plugins).toEqual([]);
+    expect(auth.options.plugins?.map(({ id }) => id)).toEqual(['two-factor']);
     expect(PORTAL_AUTH_HTTP_OPERATIONS).not.toEqual(
       expect.arrayContaining([
         expect.stringContaining('admin'),

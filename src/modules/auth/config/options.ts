@@ -1,5 +1,11 @@
 import type { BetterAuthOptions } from 'better-auth';
+import { twoFactor } from 'better-auth/plugins';
 
+import {
+  STAFF_MFA_POLICY,
+  STAFF_MFA_SESSION_METHOD_FIELD,
+  STAFF_MFA_SESSION_VERIFIED_AT_FIELD,
+} from '../mfa-policy';
 import {
   PORTAL_AUTH_BASE_PATH,
   PORTAL_AUTH_COOKIE_PREFIX,
@@ -43,9 +49,43 @@ export function createPortalAuthOptions(
       disableSignUp: true,
       enabled: true,
     },
-    plugins: [],
+    plugins: [
+      twoFactor({
+        accountLockout: {
+          durationSeconds: STAFF_MFA_POLICY.lockoutDuration,
+          enabled: true,
+          maxFailedAttempts: STAFF_MFA_POLICY.lockoutMaxFailedAttempts,
+        },
+        allowPasswordless: false,
+        backupCodeOptions: {
+          amount: STAFF_MFA_POLICY.backupCodeAmount,
+          length: STAFF_MFA_POLICY.backupCodeLength,
+          storeBackupCodes: 'encrypted',
+        },
+        issuer: STAFF_MFA_POLICY.issuer,
+        skipVerificationOnEnable: false,
+        totpOptions: {
+          digits: STAFF_MFA_POLICY.totpDigits,
+          period: STAFF_MFA_POLICY.totpPeriod,
+        },
+        trustDeviceMaxAge: STAFF_MFA_POLICY.trustedDeviceMaxAge,
+        twoFactorCookieMaxAge: STAFF_MFA_POLICY.challengeMaxAge,
+      }),
+    ],
     secret: input.secret,
     session: {
+      additionalFields: {
+        [STAFF_MFA_SESSION_METHOD_FIELD]: {
+          input: false,
+          required: false,
+          type: 'string',
+        },
+        [STAFF_MFA_SESSION_VERIFIED_AT_FIELD]: {
+          input: false,
+          required: false,
+          type: 'date',
+        },
+      },
       cookieCache: { enabled: false },
       disableSessionRefresh: PORTAL_AUTH_SESSION_POLICY.disableSessionRefresh,
       expiresIn: PORTAL_AUTH_SESSION_POLICY.expiresIn,
