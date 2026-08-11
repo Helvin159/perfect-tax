@@ -1,4 +1,4 @@
-# Better Auth core runtime handoff
+# Better Auth core runtime and Staff MFA handoff
 
 ## Downstream interfaces
 
@@ -45,8 +45,112 @@ ordinary failures trigger credential compensation.
   provider administration, impersonation, and unknown routes return 404.
 - Email/password remains enabled for login, while provider `disableSignUp` is
   also true as defense in depth. No reset callback is configured.
-- No Better Auth plugin is enabled. Agent 9 must add only its reviewed MFA plugin
-  and exact MFA HTTP operations; it must not add Admin or Organization plugins.
+- The Better Auth two-factor plugin is the only enabled plugin. Admin,
+  Organization, email OTP, trusted-device bypass, passkeys, and provider
+  administration remain disabled.
+
+## Staff MFA boundary (Agent 9)
+
+- The plugin is pinned to TOTP (six digits, 30-second period), ten encrypted
+  ten-character backup codes, a ten-minute pending challenge, the provider's
+  ten-failure/15-minute account lockout, and no trusted-device lifetime.
+- The HTTP allowlist adds only `POST /two-factor/enable`,
+  `POST /two-factor/verify-totp`, and
+  `POST /two-factor/verify-backup-code`. Disable, TOTP-secret retrieval,
+  backup-code regeneration/viewing, OTP/email, and all administration routes
+  remain unreachable.
+- `createPortalAuthHttpHandler(auth, { isStaffMfaSubject })` requires a trusted
+  server callback before an authenticated session can start enrollment or use
+  an authenticated verification path. The production route intentionally omits
+  the callback and therefore denies enrollment until Agent 11 wires canonical
+  PortalIdentity plus active-Staff resolution. A browser role, Staff ID,
+  `authUserId`, `mfaVerified`, Client-shaped object, issuer, `trustDevice`, or
+  `disableSession` field is rejected and cannot influence the callback.
+- First-time enrollment returns the provider's TOTP URI and backup-code list at
+  that one sensitive, no-store response boundary. Starting enrollment leaves
+  `user.twoFactorEnabled` false and the provider row unverified. Re-running an
+  interrupted enrollment replaces the unverified material. No application
+  code stores the raw values.
+- Successful provider verification is committed to the exact Better Auth
+  session using the additional `mfaMethod` and `mfaVerifiedAt` session fields.
+  The boundary re-reads a rotated session through Better Auth's signed response
+  cookie, verifies the account's provider `twoFactor` row, updates that session,
+  and returns only `{ "status": true }`. Failed, stale, or interrupted flows
+  leave assurance unverified.
+- `readStaffMfaAssurance(headers)` in `mfa.ts` is Agent 11's narrow interface.
+  It returns `null` without a valid session, otherwise a frozen result with:
+  `authUserId`, `enrollment` (`required | complete`), `sessionAssurance`
+  (`unverified | verified`), `enrollmentOnly`, and either `null` or frozen
+  evidence (`provider: better-auth`, `method: totp | backup-code`, `sessionId`,
+  `verifiedAt`). Enrollment is complete only when both the trusted provider user
+  flag and verified provider row agree. Session assurance is verified only when
+  the current unexpired database session carries internally written evidence.
+- Agent 11 must exact-match the returned `authUserId` to its canonical active
+  Staff/PortalIdentity resolution. It may issue an operational `StaffPrincipal`
+  only for `enrollment === 'complete'`,
+  `sessionAssurance === 'verified'`, and `enrollmentOnly === false`. It must
+  issue only the frozen `StaffEnrollmentPrincipal` operations otherwise. The
+  assurance reader never decides role, Staff status, PortalIdentity validity,
+  Client status, or freshness.
+- Session validity remains the core eight-hour absolute lifetime. MFA evidence
+  does not make a session fresh; `isFreshPortalSession` remains the independent
+  15-minute check.
+
+### MFA audit handoff
+
+Agent 7's MFA actions require a `staff-enrollment` actor with a canonical
+`StaffId`. This auth layer intentionally has only `AuthUserId` and must not
+resolve or accept a browser Staff ID. Agent 11 must record
+`mfa.enrollment.succeeded`, `mfa.verification.succeeded`, and
+`mfa.verification.failed` after it binds the auth result to the canonical Staff
+record. Metadata must remain `{}`. No TOTP code, URI, secret, backup code,
+session token, request body, or credential may be included.
+
+### Exact MFA schema requirements for Agent 14
+
+Generate/review SQL from the final Better Auth `1.6.23` options. In addition to
+the core schema below, the Staff MFA boundary requires:
+
+- `user.twoFactorEnabled`: nullable boolean with provider default `false`;
+- `session.mfaMethod`: nullable text;
+- `session.mfaVerifiedAt`: nullable timestamp;
+- new `twoFactor` table with provider string primary key `id`, required
+  `secret`, required `backupCodes`, indexed required `userId` referencing
+  `user.id`, nullable `verified` with provider default `true`, nullable
+  `failedVerificationCount` with provider default `0`, and nullable
+  `lockedUntil`; and
+- provider indexes for `twoFactor.secret` and `twoFactor.userId` exactly as
+  generated by `1.6.23`.
+
+The secret and backup-code columns contain Better Auth-encrypted ciphertext.
+Agent 14 still owns all reviewed SQL and deployment; Agent 9 creates no
+production migration.
+
+### Provider-specific residual behavior
+
+- Backup-code consumption uses the provider's guarded atomic update: a replay
+  fails and consuming one code preserves unrelated codes.
+- A successful sign-in consumes the pending two-factor challenge, so the same
+  challenge cookie cannot be replayed. Better Auth accepts a valid TOTP for the
+  current or adjacent 30-second timestep and does not persist a per-user TOTP
+  counter; the same code can therefore be accepted in a separately created
+  challenge while still in the provider window. Slice 1 adds no custom TOTP
+  replay database.
+- Lost device plus exhausted backup codes has no email/provider-admin bypass.
+  A separately approved owner recovery/break-glass runbook remains an
+  operational launch requirement.
+
+### Agent 3 shared files touched by Agent 9
+
+- `config/options.ts`: adds only the two-factor plugin and the two
+  session-assurance fields while preserving core cookies, sessions, origins,
+  registration, recovery, and provider-administration settings.
+- `config/policy.ts`: adds only the three reviewed MFA POST operations.
+- `http.ts`: routes those operations through strict body filtering, the trusted
+  Staff-subject callback, generic failures, provider confirmation, assurance
+  commit, response token stripping, and no-store headers.
+- `auth-runtime.test.ts`: updates the core configuration assertion to recognize
+  the single approved plugin without weakening any Agent 3 regression test.
 
 ## Provider-specific constraints
 
