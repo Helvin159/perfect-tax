@@ -9,8 +9,11 @@ import type {
 } from 'payload';
 
 import {
-  createSecurityEventRecorder,
-  type SecurityEventRecorder,
+  createSecurityEventRecorders,
+  type SecurityEventRecorders,
+  type TrustedPrincipalSourceResolver,
+  type TrustedSystemSourceResolver,
+  type TrustedTargetSourceResolver,
 } from '../application/recorder';
 import { SECURITY_EVENT_ACTIONS } from '../domain/actions';
 import {
@@ -96,17 +99,26 @@ type PayloadSecurityEventCreate = (
  * Binds the narrow recorder to Payload without exposing the runtime append
  * capability or any update/delete operation to application consumers.
  */
-export function createPayloadSecurityEventRecorder(
+export function createPayloadSecurityEventRecorders<
+  PrincipalSource extends object,
+  TargetSource extends object,
+  SystemSource extends object,
+>(
   payload: Pick<Payload, 'create'>,
+  provenance: Readonly<{
+    principalResolver: TrustedPrincipalSourceResolver<PrincipalSource>;
+    systemResolver: TrustedSystemSourceResolver<SystemSource>;
+    targetResolver: TrustedTargetSourceResolver<TargetSource>;
+  }>,
   now?: () => Date,
-): SecurityEventRecorder {
+): SecurityEventRecorders<PrincipalSource, TargetSource, SystemSource> {
   const capability = Object.freeze({});
   appendCapabilities.add(capability);
   const create = payload.create.bind(
     payload,
   ) as unknown as PayloadSecurityEventCreate;
 
-  return createSecurityEventRecorder({
+  return createSecurityEventRecorders({
     appendPort: {
       append: (data) =>
         create({
@@ -118,6 +130,7 @@ export function createPayloadSecurityEventRecorder(
         }),
     },
     ...(now === undefined ? {} : { now }),
+    ...provenance,
   });
 }
 

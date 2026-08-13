@@ -32,7 +32,10 @@ describe('security-event domain contract', () => {
       action: 'primary-owner.bootstrap.succeeded',
       actor: { kind: 'system' },
       correlationId,
-      metadata: { operation: 'primary-owner-bootstrap' },
+      metadata: {
+        operation: 'primary-owner-bootstrap',
+        reasonCode: 'initial-primary-owner-provisioning',
+      },
       target: { id: 41, type: 'staff' },
     });
 
@@ -40,7 +43,10 @@ describe('security-event domain contract', () => {
       action: 'primary-owner.bootstrap.succeeded',
       actor: { kind: 'system' },
       correlationId,
-      metadata: { operation: 'primary-owner-bootstrap' },
+      metadata: {
+        operation: 'primary-owner-bootstrap',
+        reasonCode: 'initial-primary-owner-provisioning',
+      },
       target: { id: 41, type: 'staff' },
     });
     expect(Object.isFrozen(event)).toBe(true);
@@ -108,6 +114,8 @@ describe('security-event domain contract', () => {
     { sessionToken: 'not-recordable' },
     { invitation_token: 'not-recordable' },
     { totpSecret: 'not-recordable' },
+    { totpCode: 'not-recordable' },
+    { mfaCode: 'not-recordable' },
     { backupCodes: ['not-recordable'] },
     { emailBody: 'not-recordable' },
     { privateDocumentContent: 'not-recordable' },
@@ -148,7 +156,10 @@ describe('security-event domain contract', () => {
       parseSecurityEventInput({
         action: 'primary-owner.bootstrap.succeeded',
         actor: { id: 7, kind: 'staff' },
-        metadata: { operation: 'primary-owner-bootstrap' },
+        metadata: {
+          operation: 'primary-owner-bootstrap',
+          reasonCode: 'initial-primary-owner-provisioning',
+        },
         target: { id: 8, type: 'staff' },
       }),
     ).toThrowError(new SecurityEventValidationError('invalid-target'));
