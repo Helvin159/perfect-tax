@@ -7,8 +7,8 @@ import {
   denyAuthorization,
   type AuthorizationDecision,
 } from '../domain/decision';
-import { decideClientAssignment, decideClientOwnership } from './evidence';
-import { requirePolicyPrincipal } from './principal';
+import type { EvidencePolicy } from './evidence';
+import type { PolicyContext } from './principal';
 
 export const CLIENT_POLICY_OPERATIONS = [
   'read',
@@ -57,69 +57,72 @@ export function isClientPolicyField(
   return typeof value === 'string' && clientPolicyFieldSet.has(value);
 }
 
-/**
- * Decides row-level Client access. Owner/administrator have Slice 1
- * operational access; intake has basic-record access; case workers require
- * matching future assignment evidence. Client principals may read only their
- * own record and cannot create or self-edit in Slice 1.
- */
-export function decideClientOperation(
-  principal: unknown,
-  operation: ClientPolicyOperation | unknown,
-  trustedEvidence?: ClientPolicyEvidence | unknown,
-): AuthorizationDecision {
-  const principalResult = requirePolicyPrincipal(principal);
-  if (principalResult.decision) return principalResult.decision;
-  if (!isClientPolicyOperation(operation)) {
-    return denyAuthorization('forbidden-role');
+export function createClientPolicy(
+  context: PolicyContext,
+  evidencePolicy: EvidencePolicy,
+) {
+  /**
+   * Decides row-level Client access after principal provenance succeeds.
+   * Client and case-worker paths additionally require trusted evidence.
+   */
+  function decideClientOperation(
+    principal: unknown,
+    operation: ClientPolicyOperation | unknown,
+    evidenceInput?: ClientPolicyEvidence | unknown,
+  ): AuthorizationDecision {
+    const principalResult = context.requirePrincipal(principal);
+    if (principalResult.decision) return principalResult.decision;
+    if (!isClientPolicyOperation(operation)) {
+      return denyAuthorization('forbidden-role');
+    }
+
+    const policyPrincipal = principalResult.principal;
+    if (policyPrincipal.kind === 'client') {
+      return operation === 'read'
+        ? evidencePolicy.decideClientOwnership(policyPrincipal, evidenceInput)
+        : denyAuthorization('forbidden-role');
+    }
+
+    if (policyPrincipal.kind !== 'staff') {
+      return denyAuthorization('forbidden-role');
+    }
+
+    if (
+      policyPrincipal.role === 'owner' ||
+      policyPrincipal.role === 'administrator' ||
+      policyPrincipal.role === 'intake'
+    ) {
+      return AUTHORIZATION_ALLOWED;
+    }
+
+    if (operation === 'create') {
+      return denyAuthorization('assignment-required');
+    }
+
+    return evidencePolicy.decideClientAssignment(
+      policyPrincipal,
+      evidenceInput,
+    );
   }
 
-  const policyPrincipal = principalResult.principal;
-  if (policyPrincipal.kind === 'client') {
-    return operation === 'read'
-      ? decideClientOwnership(policyPrincipal, trustedEvidence)
-      : denyAuthorization('forbidden-role');
-  }
+  function decideClientFieldUpdate(
+    principal: unknown,
+    field: ClientPolicyField | unknown,
+    evidenceInput?: ClientPolicyEvidence | unknown,
+  ): AuthorizationDecision {
+    const operationDecision = decideClientOperation(
+      principal,
+      'basic-update',
+      evidenceInput,
+    );
+    if (!operationDecision.allowed) return operationDecision;
 
-  if (policyPrincipal.kind !== 'staff') {
-    return denyAuthorization('forbidden-role');
-  }
+    if (!isClientPolicyField(field) || !basicClientFieldSet.has(field)) {
+      return denyAuthorization('field-restricted');
+    }
 
-  if (
-    policyPrincipal.role === 'owner' ||
-    policyPrincipal.role === 'administrator' ||
-    policyPrincipal.role === 'intake'
-  ) {
     return AUTHORIZATION_ALLOWED;
   }
 
-  if (operation === 'create') {
-    return denyAuthorization('assignment-required');
-  }
-
-  return decideClientAssignment(policyPrincipal, trustedEvidence);
-}
-
-/**
- * Applies an explicit allowlist after row-level basic-update authorization.
- * Collection access never implies that server-owned identity or lifecycle
- * fields are writable.
- */
-export function decideClientFieldUpdate(
-  principal: unknown,
-  field: ClientPolicyField | unknown,
-  trustedEvidence?: ClientPolicyEvidence | unknown,
-): AuthorizationDecision {
-  const operationDecision = decideClientOperation(
-    principal,
-    'basic-update',
-    trustedEvidence,
-  );
-  if (!operationDecision.allowed) return operationDecision;
-
-  if (!isClientPolicyField(field) || !basicClientFieldSet.has(field)) {
-    return denyAuthorization('field-restricted');
-  }
-
-  return AUTHORIZATION_ALLOWED;
+  return { decideClientFieldUpdate, decideClientOperation };
 }
