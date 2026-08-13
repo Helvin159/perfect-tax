@@ -6,6 +6,7 @@ import {
   STAFF_MFA_SESSION_METHOD_FIELD,
   STAFF_MFA_SESSION_VERIFIED_AT_FIELD,
 } from '../mfa-policy';
+import { preserveMfaEnrollmentSessionClock } from '../session-clock-continuity';
 import {
   PORTAL_AUTH_BASE_PATH,
   PORTAL_AUTH_COOKIE_PREFIX,
@@ -45,6 +46,11 @@ export function createPortalAuthOptions(
     baseURL: input.baseURL,
     ...(input.database ? { database: input.database } : {}),
     disabledPaths: [...PORTAL_AUTH_DISABLED_PATHS],
+    databaseHooks: {
+      session: {
+        create: { before: preserveMfaEnrollmentSessionClock },
+      },
+    },
     emailAndPassword: {
       disableSignUp: true,
       enabled: true,

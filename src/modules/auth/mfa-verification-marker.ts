@@ -7,6 +7,7 @@ import {
   STAFF_MFA_SESSION_VERIFIED_AT_FIELD,
   type StaffMfaMethod,
 } from './mfa-policy';
+import { parseSessionClock } from './session-clock-continuity';
 
 type MfaVerificationRuntime = Readonly<{
   $context: Promise<{
@@ -122,6 +123,11 @@ export async function commitStaffMfaVerification(
     throw new StaffMfaVerificationCommitError('session-binding');
   }
 
+  const clock = parseSessionClock(session);
+  if (!clock || clock.expiresAt.getTime() <= now().getTime()) {
+    throw new StaffMfaVerificationCommitError('session-clock');
+  }
+
   const twoFactor = await context.adapter.findOne({
     model: 'twoFactor',
     where: [{ field: 'userId', value: authUserId }],
@@ -141,4 +147,15 @@ export async function commitStaffMfaVerification(
   if (!isRecord(updated) || updated.userId !== authUserId) {
     throw new StaffMfaVerificationCommitError('session-update');
   }
+
+  const updatedClock = parseSessionClock(updated);
+  if (
+    !updatedClock ||
+    updatedClock.createdAt.getTime() !== clock.createdAt.getTime() ||
+    updatedClock.expiresAt.getTime() !== clock.expiresAt.getTime()
+  ) {
+    throw new StaffMfaVerificationCommitError('session-clock-update');
+  }
+
+  return updatedClock;
 }
