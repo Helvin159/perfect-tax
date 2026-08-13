@@ -77,6 +77,25 @@ ordinary failures trigger credential compensation.
   cookie, verifies the account's provider `twoFactor` row, updates that session,
   and returns only `{ "status": true }`. Failed, stale, or interrupted flows
   leave assurance unverified.
+- Better Auth `1.6.23` initial TOTP verification rotates the authenticated
+  enrollment session. Although the plugin passes the active session to
+  `createSession`, the provider's implementation overwrites `createdAt` with
+  the rotation time and `expiresAt` with rotation time plus eight hours; its
+  cookie writer independently emits the full configured `Max-Age`. The
+  `databaseHooks.session.create.before` hook now restores the trusted active
+  session's original `createdAt` and caps the new row's `expiresAt` to the
+  original deadline, but only on `/two-factor/verify-totp`, only for a distinct
+  replacement token, and only when old and new rows have the same provider user
+  ID. The HTTP boundary then caps the signed replacement cookie's `Max-Age` and
+  `Expires` attributes to that persisted deadline. Neither clock is accepted
+  from request data.
+- Enrollment rotation therefore changes MFA assurance without creating a new
+  authentication epoch. An old non-fresh session remains non-fresh, a
+  near-expiry session retains only its original remaining lifetime, ordinary
+  reads remain non-sliding, and failed TOTP verification performs no clock
+  write. A genuinely new completed TOTP or backup-code login has no active
+  enrollment session in provider context and correctly receives a new normal
+  authentication epoch.
 - `readStaffMfaAssurance(headers)` in `mfa.ts` is Agent 11's narrow interface.
   It returns `null` without a valid session, otherwise a frozen result with:
   `authUserId`, `enrollment` (`required | complete`), `sessionAssurance`
@@ -126,6 +145,11 @@ The secret and backup-code columns contain Better Auth-encrypted ciphertext.
 Agent 14 still owns all reviewed SQL and deployment; Agent 9 creates no
 production migration.
 
+The session-clock repair adds no further column. It safely preserves the
+standard provider `session.createdAt` and `session.expiresAt` values through the
+official session-create database hook, and only rewrites lifetime attributes on
+the provider-signed replacement cookie. Agent 14's schema handoff is unchanged.
+
 ### Provider-specific residual behavior
 
 - Backup-code consumption uses the provider's guarded atomic update: a replay
@@ -143,12 +167,16 @@ production migration.
 ### Agent 3 shared files touched by Agent 9
 
 - `config/options.ts`: adds only the two-factor plugin and the two
-  session-assurance fields while preserving core cookies, sessions, origins,
-  registration, recovery, and provider-administration settings.
+  session-assurance fields plus the narrow session-create continuity hook while
+  preserving core cookies, session policy values, origins, registration,
+  recovery, and provider-administration settings.
 - `config/policy.ts`: adds only the three reviewed MFA POST operations.
 - `http.ts`: routes those operations through strict body filtering, the trusted
   Staff-subject callback, generic failures, provider confirmation, assurance
   commit, response token stripping, and no-store headers.
+- `mfa-http.ts`: after trusted provider verification, caps any replacement
+  session cookie to the provider-persisted original deadline; it does not
+  change signing, token selection, or ordinary login behavior.
 - `auth-runtime.test.ts`: updates the core configuration assertion to recognize
   the single approved plugin without weakening any Agent 3 regression test.
 

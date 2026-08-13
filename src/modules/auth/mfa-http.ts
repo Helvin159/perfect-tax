@@ -4,6 +4,7 @@ import type { AuthUserId } from '@/modules/portal-identity/domain/identifiers';
 
 import { createStaffMfaAssuranceReader } from './mfa-assurance-reader';
 import { commitStaffMfaVerification } from './mfa-verification-marker';
+import { capPortalSessionCookieToDeadline } from './session-clock-continuity';
 
 type StaffMfaHttpRuntime = Parameters<typeof createStaffMfaAssuranceReader>[0] &
   Parameters<typeof commitStaffMfaVerification>[0] &
@@ -121,8 +122,14 @@ function hardenSensitiveResponse(response: Response) {
   });
 }
 
-function successfulVerificationResponse(providerResponse: Response) {
-  const headers = new Headers(providerResponse.headers);
+function successfulVerificationResponse(
+  providerResponse: Response,
+  expiresAt: Date,
+) {
+  const headers = capPortalSessionCookieToDeadline(
+    new Headers(providerResponse.headers),
+    expiresAt,
+  );
   headers.delete('content-length');
   headers.set('cache-control', 'no-store');
   headers.set('content-type', 'application/json');
@@ -196,15 +203,16 @@ export async function handleStaffMfaHttpRequest(
     return hardenSensitiveResponse(providerResponse);
   }
 
+  let clock;
   try {
-    await commitStaffMfaVerification(
+    clock = await commitStaffMfaVerification(
       runtime,
       providerResponse,
       verificationMethodByPath[path],
     );
   } catch {
-    return genericFailure(500, providerResponse.headers);
+    return genericFailure(500);
   }
 
-  return successfulVerificationResponse(providerResponse);
+  return successfulVerificationResponse(providerResponse, clock.expiresAt);
 }

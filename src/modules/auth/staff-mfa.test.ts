@@ -17,6 +17,14 @@ import {
 import { createPortalAuthHttpHandler } from './http';
 import { createStaffMfaAssuranceReader } from './mfa-assurance-reader';
 import { STAFF_MFA_POLICY } from './mfa-policy';
+import {
+  capPortalSessionCookieToDeadline,
+  preserveMfaEnrollmentSessionClock,
+} from './session-clock-continuity';
+import {
+  createAuthenticatedSessionReader,
+  isFreshPortalSession,
+} from './session-reader';
 
 const origin = 'https://portal.example.com';
 const fixedTime = new Date('2026-08-10T12:00:05.000Z');
@@ -45,7 +53,8 @@ function createTestRuntime(
   });
   const provision = createBootstrapCredentialProvisioner(auth);
   const readAssurance = createStaffMfaAssuranceReader(auth);
-  return { auth, handler, options, provision, readAssurance };
+  const readSession = createAuthenticatedSessionReader(auth);
+  return { auth, handler, options, provision, readAssurance, readSession };
 }
 
 function request(path: string, init: RequestInit & { origin?: string } = {}) {
@@ -71,6 +80,26 @@ function responseCookie(response: Response, suffix: string) {
   );
   expect(match?.[1]).toBeTruthy();
   return match![1];
+}
+
+function sessionCookieAttributes(response: Response) {
+  const getSetCookie = (
+    response.headers as Headers & { getSetCookie?: () => string[] }
+  ).getSetCookie;
+  const cookies =
+    typeof getSetCookie === 'function'
+      ? getSetCookie.call(response.headers)
+      : [response.headers.get('set-cookie') ?? ''];
+  const value = cookies.find((cookie) =>
+    cookie.startsWith('__Secure-portal-auth.session_token='),
+  );
+  expect(value).toBeTruthy();
+  const maxAge = value!.match(/Max-Age=(\d+)/i)?.[1];
+  const expires = value!.match(/Expires=([^;]+)/i)?.[1];
+  return {
+    expiresAt: expires ? new Date(expires) : undefined,
+    maxAge: maxAge ? Number.parseInt(maxAge, 10) : undefined,
+  };
 }
 
 async function login(
@@ -248,6 +277,223 @@ describe('Staff MFA boundary', () => {
     });
   });
 
+  it('preserves freshness origin and absolute deadline for a 16-minute-old enrollment session', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(fixedTime);
+    const runtime = createTestRuntime();
+    await provision(runtime.provision);
+    const originalCookie = responseCookie(
+      await login(runtime.handler),
+      'session_token',
+    );
+    const original = await runtime.readSession(
+      new Headers({ cookie: originalCookie }),
+    );
+    expect(original).not.toBeNull();
+
+    const verificationTime = new Date(fixedTime.getTime() + 16 * 60_000);
+    vi.setSystemTime(verificationTime);
+    expect(isFreshPortalSession(original!, verificationTime)).toBe(false);
+    const { enrollment } = await startEnrollment(runtime, originalCookie);
+    const verified = await runtime.handler(
+      post(
+        '/two-factor/verify-totp',
+        { code: totpCode(enrollment.totpURI) },
+        originalCookie,
+      ),
+    );
+    expect(verified.status).toBe(200);
+    const replacementCookie = responseCookie(verified, 'session_token');
+    const replacement = await runtime.readSession(
+      new Headers({ cookie: replacementCookie }),
+    );
+
+    expect(replacement).toMatchObject({
+      authUserId: original!.authUserId,
+      createdAt: original!.createdAt,
+      expiresAt: original!.expiresAt,
+    });
+    expect(replacement!.sessionId).not.toBe(original!.sessionId);
+    expect(isFreshPortalSession(replacement!, verificationTime)).toBe(false);
+    expect(
+      await runtime.readAssurance(new Headers({ cookie: replacementCookie })),
+    ).toMatchObject({
+      enrollment: 'complete',
+      sessionAssurance: 'verified',
+    });
+    expect(sessionCookieAttributes(verified)).toEqual({
+      expiresAt: original!.expiresAt,
+      maxAge: PORTAL_AUTH_SESSION_POLICY.expiresIn - 16 * 60,
+    });
+  });
+
+  it('preserves a near-expiry deadline in both the replacement row and browser cookie', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(fixedTime);
+    const runtime = createTestRuntime();
+    await provision(runtime.provision);
+    const originalCookie = responseCookie(
+      await login(runtime.handler),
+      'session_token',
+    );
+    const original = await runtime.readSession(
+      new Headers({ cookie: originalCookie }),
+    );
+
+    vi.setSystemTime(
+      new Date(fixedTime.getTime() + 7 * 3_600_000 + 55 * 60_000),
+    );
+    const { enrollment } = await startEnrollment(runtime, originalCookie);
+    const verified = await runtime.handler(
+      post(
+        '/two-factor/verify-totp',
+        { code: totpCode(enrollment.totpURI) },
+        originalCookie,
+      ),
+    );
+    expect(verified.status).toBe(200);
+    const replacement = await runtime.readSession(
+      new Headers({ cookie: responseCookie(verified, 'session_token') }),
+    );
+    const cookie = sessionCookieAttributes(verified);
+
+    expect(replacement?.createdAt).toEqual(original!.createdAt);
+    expect(replacement?.expiresAt.getTime()).toBeLessThanOrEqual(
+      original!.expiresAt.getTime(),
+    );
+    expect(cookie.expiresAt?.getTime()).toBeLessThanOrEqual(
+      original!.expiresAt.getTime(),
+    );
+    expect(cookie.maxAge).toBeLessThanOrEqual(5 * 60);
+  });
+
+  it('does not slide clocks on ordinary reads and failed TOTP verification', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(fixedTime);
+    const runtime = createTestRuntime();
+    await provision(runtime.provision);
+    const cookie = responseCookie(
+      await login(runtime.handler),
+      'session_token',
+    );
+    const original = await runtime.readSession(new Headers({ cookie }));
+
+    vi.setSystemTime(new Date(fixedTime.getTime() + 16 * 60_000));
+    const { enrollment } = await startEnrollment(runtime, cookie);
+    const beforeFailure = await runtime.readSession(new Headers({ cookie }));
+    const failed = await runtime.handler(
+      post('/two-factor/verify-totp', { code: '000000' }, cookie),
+    );
+    expect(failed.status).toBe(401);
+    const afterFailure = await runtime.readSession(new Headers({ cookie }));
+
+    expect(beforeFailure).toEqual(original);
+    expect(afterFailure).toEqual(original);
+    expect(await runtime.readAssurance(new Headers({ cookie }))).toMatchObject({
+      sessionAssurance: 'unverified',
+    });
+    expect(enrollment.totpURI).toBeTruthy();
+
+    vi.setSystemTime(new Date(fixedTime.getTime() + 17 * 60_000));
+    expect(await runtime.readSession(new Headers({ cookie }))).toEqual(
+      original,
+    );
+    expect(await runtime.readSession(new Headers({ cookie }))).toEqual(
+      original,
+    );
+  });
+
+  it('allows a genuinely new completed TOTP login to establish new clocks', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(fixedTime);
+    const runtime = createTestRuntime();
+    await provision(runtime.provision);
+    const originalCookie = responseCookie(
+      await login(runtime.handler),
+      'session_token',
+    );
+    const { enrollment } = await startEnrollment(runtime, originalCookie);
+    const enrollmentVerified = await runtime.handler(
+      post(
+        '/two-factor/verify-totp',
+        { code: totpCode(enrollment.totpURI) },
+        originalCookie,
+      ),
+    );
+    await runtime.handler(
+      post(
+        '/sign-out',
+        {},
+        responseCookie(enrollmentVerified, 'session_token'),
+      ),
+    );
+
+    const newLoginTime = new Date(fixedTime.getTime() + 2 * 3_600_000);
+    vi.setSystemTime(newLoginTime);
+    const challengeCookie = responseCookie(
+      await login(runtime.handler),
+      'two_factor',
+    );
+    const completed = await runtime.handler(
+      post(
+        '/two-factor/verify-totp',
+        { code: totpCode(enrollment.totpURI) },
+        challengeCookie,
+      ),
+    );
+    const session = await runtime.readSession(
+      new Headers({ cookie: responseCookie(completed, 'session_token') }),
+    );
+
+    expect(completed.status).toBe(200);
+    expect(session?.createdAt).toEqual(newLoginTime);
+    expect(session?.expiresAt).toEqual(
+      new Date(newLoginTime.getTime() + 8 * 3_600_000),
+    );
+    expect(isFreshPortalSession(session!, newLoginTime)).toBe(true);
+    expect(sessionCookieAttributes(completed).maxAge).toBe(28_800);
+  });
+
+  it('refuses to attach another user or session lineage and caps only the portal session cookie', async () => {
+    const candidateTime = new Date('2026-08-12T12:00:00.000Z');
+    const candidate = {
+      createdAt: candidateTime,
+      expiresAt: new Date(candidateTime.getTime() + 28_800_000),
+      token: 'new-user-b-token',
+      userId: 'auth-user-b',
+    };
+    const mismatched = await preserveMfaEnrollmentSessionClock(candidate, {
+      context: {
+        session: {
+          session: {
+            createdAt: new Date(candidateTime.getTime() - 16 * 60_000),
+            expiresAt: new Date(candidateTime.getTime() + 7 * 3_600_000),
+            token: 'old-user-a-token',
+            userId: 'auth-user-a',
+          },
+        },
+      },
+      path: '/two-factor/verify-totp',
+    });
+    expect(mismatched).toBeUndefined();
+
+    const headers = new Headers();
+    headers.append(
+      'set-cookie',
+      '__Secure-portal-auth.session_token=signed; Path=/; Max-Age=28800; HttpOnly',
+    );
+    headers.append('set-cookie', 'unrelated=value; Path=/; Max-Age=1000');
+    const deadline = new Date(candidateTime.getTime() + 300_000);
+    const capped = capPortalSessionCookieToDeadline(
+      headers,
+      deadline,
+      candidateTime,
+    );
+    expect(capped.get('set-cookie')).toContain('Max-Age=300');
+    expect(capped.get('set-cookie')).toContain('unrelated=value');
+    expect(capped.get('set-cookie')).toContain('Max-Age=1000');
+  });
+
   it('keeps enrollment start non-operational, rejects invalid/stale TOTP, and verifies only provider-confirmed sessions', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(fixedTime);
@@ -381,6 +627,8 @@ describe('Staff MFA boundary', () => {
     expect(stored?.secret).not.toContain(uriSecret);
 
     await runtime.handler(post('/sign-out', {}, enrolledCookie));
+    const backupLoginTime = new Date(fixedTime.getTime() + 3_600_000);
+    vi.setSystemTime(backupLoginTime);
     const challenge = await login(runtime.handler);
     expect(await challenge.clone().json()).toMatchObject({
       twoFactorMethods: ['totp'],
@@ -402,6 +650,15 @@ describe('Staff MFA boundary', () => {
       evidence: { method: 'backup-code' },
       sessionAssurance: 'verified',
     });
+    const backupSession = await runtime.readSession(
+      new Headers({ cookie: backupSessionCookie }),
+    );
+    expect(backupSession?.createdAt).toEqual(backupLoginTime);
+    expect(backupSession?.expiresAt).toEqual(
+      new Date(backupLoginTime.getTime() + 8 * 3_600_000),
+    );
+    expect(isFreshPortalSession(backupSession!, backupLoginTime)).toBe(true);
+    expect(sessionCookieAttributes(backupVerified).maxAge).toBe(28_800);
 
     await runtime.handler(post('/sign-out', {}, backupSessionCookie));
     const secondChallengeCookie = responseCookie(
