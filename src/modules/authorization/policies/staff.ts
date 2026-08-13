@@ -15,7 +15,7 @@ import {
   denyAuthorization,
   type AuthorizationDecision,
 } from '../domain/decision';
-import { requirePolicyPrincipal } from './principal';
+import type { PolicyContext } from './principal';
 
 export const STAFF_POLICY_OPERATIONS = [
   'read',
@@ -72,7 +72,7 @@ export function isStaffPolicyField(value: unknown): value is StaffPolicyField {
   return typeof value === 'string' && staffPolicyFieldSet.has(value);
 }
 
-export function parseStaffResourceEvidence(
+function parseStaffResourceEvidence(
   value: unknown,
 ): StaffResourceEvidence | undefined {
   if (
@@ -89,14 +89,14 @@ export function parseStaffResourceEvidence(
     return undefined;
   }
 
-  return Object.freeze({
+  return {
     isPrimaryOwner: value.isPrimaryOwner,
     role: value.role,
     staffId,
-  });
+  };
 }
 
-export function parseStaffCreationEvidence(
+function parseStaffCreationEvidence(
   value: unknown,
 ): StaffCreationEvidence | undefined {
   if (
@@ -109,10 +109,10 @@ export function parseStaffCreationEvidence(
     return undefined;
   }
 
-  return Object.freeze({
+  return {
     isPrimaryOwner: value.isPrimaryOwner,
     role: value.role,
-  });
+  };
 }
 
 /**
@@ -123,73 +123,84 @@ export function parseStaffCreationEvidence(
  * Slice 1 implements no Staff lifecycle service. These decisions define the
  * boundary for later services without making those services applicable now.
  */
-export function decideStaffOperation(
-  principal: unknown,
-  operation: StaffPolicyOperation | unknown,
-  trustedEvidence?:
-    StaffId | StaffResourceEvidence | StaffCreationEvidence | unknown,
-): AuthorizationDecision {
-  const principalResult = requirePolicyPrincipal(principal);
-  if (principalResult.decision) return principalResult.decision;
-  if (!isStaffPolicyOperation(operation)) {
-    return denyAuthorization('forbidden-role');
-  }
+export function createStaffPolicy(context: PolicyContext) {
+  const trustedCreationPredicate =
+    context.provenance.isTrustedStaffCreationEvidence;
+  const trustedResourcePredicate =
+    context.provenance.isTrustedStaffResourceEvidence;
 
-  const policyPrincipal = principalResult.principal;
-  if (policyPrincipal.kind !== 'staff') {
-    return denyAuthorization('forbidden-role');
-  }
-
-  if (operation === 'read') {
-    if (
-      policyPrincipal.role === 'owner' ||
-      policyPrincipal.role === 'administrator'
-    ) {
-      return AUTHORIZATION_ALLOWED;
+  function decideStaffOperation(
+    principal: unknown,
+    operation: StaffPolicyOperation | unknown,
+    evidenceInput?: StaffResourceEvidence | StaffCreationEvidence | unknown,
+  ): AuthorizationDecision {
+    const principalResult = context.requirePrincipal(principal);
+    if (principalResult.decision) return principalResult.decision;
+    if (!isStaffPolicyOperation(operation)) {
+      return denyAuthorization('forbidden-role');
     }
 
-    const target = parseStaffId(trustedEvidence);
-    return target === policyPrincipal.staffId
+    const policyPrincipal = principalResult.principal;
+    if (policyPrincipal.kind !== 'staff') {
+      return denyAuthorization('forbidden-role');
+    }
+
+    if (operation === 'read') {
+      if (
+        policyPrincipal.role === 'owner' ||
+        policyPrincipal.role === 'administrator'
+      ) {
+        return AUTHORIZATION_ALLOWED;
+      }
+
+      if (!trustedResourcePredicate(evidenceInput)) {
+        return denyAuthorization('forbidden-role');
+      }
+
+      const target = parseStaffResourceEvidence(evidenceInput);
+      return target?.staffId === policyPrincipal.staffId
+        ? AUTHORIZATION_ALLOWED
+        : denyAuthorization('forbidden-role');
+    }
+
+    if (operation === 'create') {
+      if (!trustedCreationPredicate(evidenceInput)) {
+        return denyAuthorization('owner-protected');
+      }
+      const evidence = parseStaffCreationEvidence(evidenceInput);
+      if (!evidence || evidence.isPrimaryOwner || evidence.role === 'owner') {
+        return denyAuthorization('owner-protected');
+      }
+    }
+
+    if (operation === 'disable' || operation === 'delete') {
+      if (!trustedResourcePredicate(evidenceInput)) {
+        return denyAuthorization('owner-protected');
+      }
+      const evidence = parseStaffResourceEvidence(evidenceInput);
+      if (!evidence || evidence.isPrimaryOwner || evidence.role === 'owner') {
+        return denyAuthorization('owner-protected');
+      }
+    }
+
+    return policyPrincipal.role === 'owner'
       ? AUTHORIZATION_ALLOWED
       : denyAuthorization('forbidden-role');
   }
 
-  if (operation === 'create') {
-    if (!Object.isFrozen(trustedEvidence)) {
-      return denyAuthorization('owner-protected');
+  function decideStaffFieldUpdate(
+    principal: unknown,
+    field: StaffPolicyField | unknown,
+  ): AuthorizationDecision {
+    const operationDecision = decideStaffOperation(principal, 'basic-update');
+    if (!operationDecision.allowed) return operationDecision;
+
+    if (!isStaffPolicyField(field) || !basicStaffFieldSet.has(field)) {
+      return denyAuthorization('field-restricted');
     }
-    const evidence = parseStaffCreationEvidence(trustedEvidence);
-    if (!evidence || evidence.isPrimaryOwner || evidence.role === 'owner') {
-      return denyAuthorization('owner-protected');
-    }
+
+    return AUTHORIZATION_ALLOWED;
   }
 
-  if (operation === 'disable' || operation === 'delete') {
-    if (!Object.isFrozen(trustedEvidence)) {
-      return denyAuthorization('owner-protected');
-    }
-    const evidence = parseStaffResourceEvidence(trustedEvidence);
-    if (!evidence || evidence.isPrimaryOwner || evidence.role === 'owner') {
-      return denyAuthorization('owner-protected');
-    }
-  }
-
-  return policyPrincipal.role === 'owner'
-    ? AUTHORIZATION_ALLOWED
-    : denyAuthorization('forbidden-role');
-}
-
-/** Applies the ordinary Staff basic-update field allowlist. */
-export function decideStaffFieldUpdate(
-  principal: unknown,
-  field: StaffPolicyField | unknown,
-): AuthorizationDecision {
-  const operationDecision = decideStaffOperation(principal, 'basic-update');
-  if (!operationDecision.allowed) return operationDecision;
-
-  if (!isStaffPolicyField(field) || !basicStaffFieldSet.has(field)) {
-    return denyAuthorization('field-restricted');
-  }
-
-  return AUTHORIZATION_ALLOWED;
+  return { decideStaffFieldUpdate, decideStaffOperation };
 }

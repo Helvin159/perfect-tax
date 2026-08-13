@@ -3,7 +3,7 @@ import {
   denyAuthorization,
   type AuthorizationDecision,
 } from '../domain/decision';
-import { requirePolicyPrincipal } from './principal';
+import type { PolicyContext } from './principal';
 
 export const PRIMARY_OWNER_MUTATIONS = [
   'create',
@@ -24,33 +24,36 @@ export function isPrimaryOwnerMutation(
 }
 
 /** Normal application principals can never mutate the protected owner. */
-export function decidePrimaryOwnerMutation(
-  principal: unknown,
-  mutation: PrimaryOwnerMutation | unknown,
-): AuthorizationDecision {
-  const principalResult = requirePolicyPrincipal(principal);
-  if (principalResult.decision) return principalResult.decision;
-  if (principalResult.principal.kind !== 'staff') {
-    return denyAuthorization('forbidden-role');
+export function createOwnerProtectionPolicy(context: PolicyContext) {
+  function decidePrimaryOwnerMutation(
+    principal: unknown,
+    mutation: PrimaryOwnerMutation | unknown,
+  ): AuthorizationDecision {
+    const principalResult = context.requirePrincipal(principal);
+    if (principalResult.decision) return principalResult.decision;
+    if (principalResult.principal.kind !== 'staff') {
+      return denyAuthorization('forbidden-role');
+    }
+
+    return isPrimaryOwnerMutation(mutation)
+      ? denyAuthorization('owner-protected')
+      : denyAuthorization('forbidden-role');
   }
 
-  return isPrimaryOwnerMutation(mutation)
-    ? denyAuthorization('owner-protected')
-    : denyAuthorization('forbidden-role');
-}
+  function decidePrincipalSystemOperation(
+    principal: unknown,
+    operation: unknown,
+  ): AuthorizationDecision {
+    const principalResult = context.requirePrincipal(principal);
+    if (principalResult.decision) return principalResult.decision;
+    if (principalResult.principal.kind !== 'staff') {
+      return denyAuthorization('forbidden-role');
+    }
 
-/** System operations require Agent 10/12's unforgeable server capability. */
-export function decidePrincipalSystemOperation(
-  principal: unknown,
-  operation: unknown,
-): AuthorizationDecision {
-  const principalResult = requirePolicyPrincipal(principal);
-  if (principalResult.decision) return principalResult.decision;
-  if (principalResult.principal.kind !== 'staff') {
-    return denyAuthorization('forbidden-role');
+    return isSystemOperation(operation)
+      ? denyAuthorization('system-capability-required')
+      : denyAuthorization('forbidden-role');
   }
 
-  return isSystemOperation(operation)
-    ? denyAuthorization('system-capability-required')
-    : denyAuthorization('forbidden-role');
+  return { decidePrimaryOwnerMutation, decidePrincipalSystemOperation };
 }

@@ -8,50 +8,61 @@ import {
   denyAuthorization,
   type AuthorizationDecision,
 } from '../domain/decision';
+import type { AuthorizationProvenance } from './provenance';
 
 export type PrincipalPolicyResult =
   | Readonly<{ decision: AuthorizationDecision; principal?: never }>
   | Readonly<{ decision?: never; principal: PortalPrincipal }>;
 
+export type PolicyContext = Readonly<{
+  provenance: AuthorizationProvenance;
+  requirePrincipal(principal: unknown): PrincipalPolicyResult;
+}>;
+
 /**
- * Keeps policy entry points fail-closed at runtime without turning a parsed
- * browser value into a trusted principal. Callers must still supply the
- * resolver-attested principal required by the bridge contract.
+ * Builds the shared policy boundary around downstream runtime provenance.
+ * Shape validation runs only after the injected predicate establishes trust.
  */
-export function requirePolicyPrincipal(
-  principal: unknown,
-): PrincipalPolicyResult {
-  if (principal === undefined || principal === null) {
-    return Object.freeze({
-      decision: denyAuthorization('unauthenticated'),
-    });
+export function createPolicyContext(
+  provenance: AuthorizationProvenance,
+): PolicyContext {
+  const trustedPrincipalPredicate = provenance.isTrustedPrincipal;
+
+  function requirePrincipal(principal: unknown): PrincipalPolicyResult {
+    if (principal === undefined || principal === null) {
+      return { decision: denyAuthorization('unauthenticated') };
+    }
+
+    if (!trustedPrincipalPredicate(principal)) {
+      return { decision: denyAuthorization('invalid-principal') };
+    }
+
+    if (isPortalPrincipal(principal)) {
+      return { principal };
+    }
+
+    // These more specific denials are available only for values whose runtime
+    // provenance was already established. A lookalike never reaches them.
+    if (
+      isRecord(principal) &&
+      (principal.kind === 'staff' || principal.kind === 'client') &&
+      (principal.status === 'disabled' || principal.status === 'inactive') &&
+      parsePortalPrincipal({ ...principal, status: 'active' })
+    ) {
+      return { decision: denyAuthorization('inactive-subject') };
+    }
+
+    if (
+      isRecord(principal) &&
+      principal.kind === 'staff' &&
+      principal.mfaAssurance !== 'verified' &&
+      parsePortalPrincipal({ ...principal, mfaAssurance: 'verified' })
+    ) {
+      return { decision: denyAuthorization('mfa-required') };
+    }
+
+    return { decision: denyAuthorization('invalid-principal') };
   }
 
-  if (isPortalPrincipal(principal)) {
-    return Object.freeze({ principal });
-  }
-
-  if (
-    isRecord(principal) &&
-    (principal.kind === 'staff' || principal.kind === 'client') &&
-    (principal.status === 'disabled' || principal.status === 'inactive') &&
-    parsePortalPrincipal({ ...principal, status: 'active' })
-  ) {
-    return Object.freeze({
-      decision: denyAuthorization('inactive-subject'),
-    });
-  }
-
-  if (
-    isRecord(principal) &&
-    principal.kind === 'staff' &&
-    principal.mfaAssurance !== 'verified' &&
-    parsePortalPrincipal({ ...principal, mfaAssurance: 'verified' })
-  ) {
-    return Object.freeze({ decision: denyAuthorization('mfa-required') });
-  }
-
-  return Object.freeze({
-    decision: denyAuthorization('invalid-principal'),
-  });
+  return { provenance, requirePrincipal };
 }
