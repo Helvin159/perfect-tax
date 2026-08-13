@@ -3,17 +3,19 @@ import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-import { parseStaffId } from '@/modules/portal-identity/domain/identifiers';
+import { parsePortalPrincipal } from '@/modules/portal-identity/domain/principal';
 
-import type { SecurityEventRecorder } from '../application/recorder';
+import type { SecurityEventRecorders } from '../application/recorder';
 import {
-  createPayloadSecurityEventRecorder,
+  createPayloadSecurityEventRecorders,
   denySecurityEventDelete,
   denySecurityEventUpdate,
   enforceSecurityEventAppend,
   SecurityEvents,
   SecurityEventWriteDeniedError,
 } from './security-events-collection';
+
+type PrincipalSource = Readonly<{ opaquePrincipalSource: string }>;
 
 describe('SecurityEvents collection boundary', () => {
   it('denies normal create, read, update, and delete access', () => {
@@ -68,9 +70,20 @@ describe('SecurityEvents collection boundary', () => {
     );
   });
 
-  it('allows a valid append only through the narrow Payload recorder', async () => {
-    const staffId = parseStaffId(7);
-    if (!staffId) throw new Error('invalid test fixture');
+  it('allows append only after both principal provenance and the private Payload capability succeed', async () => {
+    const principalSource = { opaquePrincipalSource: 'trusted' };
+    const principalBindings = new WeakMap<
+      object,
+      NonNullable<ReturnType<typeof parsePortalPrincipal>>
+    >();
+    const principal = parsePortalPrincipal({
+      authUserId: 'auth_staff_7',
+      kind: 'staff-enrollment',
+      allowedOperations: ['enroll-mfa', 'verify-mfa', 'sign-out'],
+      staffId: 7,
+    });
+    if (!principal) throw new Error('invalid principal fixture');
+    principalBindings.set(principalSource, principal);
 
     const create = vi.fn(async (operation: Record<string, unknown>) => {
       enforceSecurityEventAppend({
@@ -80,15 +93,22 @@ describe('SecurityEvents collection boundary', () => {
       });
       return { id: 9 };
     });
-    const recorder = createPayloadSecurityEventRecorder(
+    const recorders = createPayloadSecurityEventRecorders(
       { create } as unknown as Pick<Payload, 'create'>,
+      {
+        principalResolver: {
+          resolvePrincipal: (source: PrincipalSource) =>
+            principalBindings.get(source),
+        },
+        systemResolver: { resolveSystemSource: () => undefined },
+        targetResolver: { resolveTarget: () => undefined },
+      },
       () => new Date('2026-08-10T15:00:00.000Z'),
     );
 
     await expect(
-      recorder.recordSecurityEvent({
+      recorders.recordPrincipalSecurityEvent(principalSource, {
         action: 'mfa.verification.succeeded',
-        actor: { id: staffId, kind: 'staff-enrollment' },
         metadata: {},
       }),
     ).resolves.toMatchObject({ eventId: 9 });
@@ -102,10 +122,13 @@ describe('SecurityEvents collection boundary', () => {
     );
   });
 
-  it('keeps ordinary consumers on the append-only recorder type', () => {
+  it('keeps ordinary consumers on source-bound APIs with no generic recorder', () => {
     expectTypeOf<
-      ReturnType<typeof createPayloadSecurityEventRecorder>
-    >().toEqualTypeOf<SecurityEventRecorder>();
+      ReturnType<typeof createPayloadSecurityEventRecorders>
+    >().toEqualTypeOf<SecurityEventRecorders<object, object, object>>();
+    expectTypeOf<
+      ReturnType<typeof createPayloadSecurityEventRecorders>
+    >().not.toHaveProperty('recordSecurityEvent');
     expect(SecurityEvents.admin?.hidden).toBe(true);
     expect(SecurityEvents.disableBulkDelete).toBe(true);
     expect(SecurityEvents.disableDuplicate).toBe(true);

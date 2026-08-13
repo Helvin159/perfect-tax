@@ -69,14 +69,22 @@ export const SESSION_END_REASON_CODES = Object.freeze([
 
 export type SessionEndReasonCode = (typeof SESSION_END_REASON_CODES)[number];
 
+export const SYSTEM_EVENT_REASON_CODES = Object.freeze([
+  'initial-primary-owner-provisioning',
+] as const);
+
+export type SystemEventReasonCode = (typeof SYSTEM_EVENT_REASON_CODES)[number];
+
 type EmptyMetadata = Readonly<Record<string, never>>;
 
-type SecurityEventMetadataByAction = Readonly<{
+export type SecurityEventMetadataByAction = Readonly<{
   'primary-owner.bootstrap.succeeded': Readonly<{
     operation: SystemOperation;
+    reasonCode: SystemEventReasonCode;
   }>;
   'primary-owner.bootstrap.failed': Readonly<{
     operation: SystemOperation;
+    reasonCode: SystemEventReasonCode;
   }>;
   'authentication.succeeded': EmptyMetadata;
   'authentication.failed': EmptyMetadata;
@@ -147,6 +155,8 @@ const prohibitedKeyFragments = [
   'token',
   'secret',
   'backupcode',
+  'totp',
+  'mfacode',
   'emailbody',
   'documentcontent',
   'requestbody',
@@ -159,6 +169,7 @@ const correlationIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const sessionEndReasonCodeSet = new Set<string>(SESSION_END_REASON_CODES);
+const systemEventReasonCodeSet = new Set<string>(SYSTEM_EVENT_REASON_CODES);
 
 function normalizeKey(key: string): string {
   return key.toLowerCase().replaceAll(/[^a-z0-9]/g, '');
@@ -265,9 +276,14 @@ function parseMetadata(
   switch (action) {
     case 'primary-owner.bootstrap.succeeded':
     case 'primary-owner.bootstrap.failed':
-      return hasExactKeys(value, ['operation']) &&
-        isSystemOperation(value.operation)
-        ? Object.freeze({ operation: value.operation })
+      return hasExactKeys(value, ['operation', 'reasonCode']) &&
+        isSystemOperation(value.operation) &&
+        typeof value.reasonCode === 'string' &&
+        systemEventReasonCodeSet.has(value.reasonCode)
+        ? Object.freeze({
+            operation: value.operation,
+            reasonCode: value.reasonCode,
+          })
         : undefined;
     case 'session.ended':
       return hasExactKeys(value, ['reasonCode']) &&
@@ -325,6 +341,10 @@ function hasValidActionShape(input: SecurityEventInput): boolean {
   }
 }
 
+/**
+ * Validates event structure and data minimization only. Success does not prove
+ * actor or target provenance and must never grant append authority.
+ */
 export function parseSecurityEventInput(value: unknown): SecurityEventInput {
   if (containsProhibitedField(value)) {
     throw new SecurityEventValidationError('prohibited-field');

@@ -30,10 +30,14 @@ and generated Payload types.
   partitioning, analytics, or SIEM work is part of Slice 1.
 - Run clean-install and populated-upgrade tests, including direct SQL attempts
   to update, delete, and truncate as the runtime role. All must fail while an
-  insert through `recordSecurityEvent` succeeds.
+  insert through a source-bound security-event recorder succeeds.
 
 The application layer rejects update/delete even when Payload access is
 bypassed, validates every append again inside the collection hook, and accepts
 only UUID correlation IDs plus action-specific scalar metadata. Database grants
 and the trigger are still required defense in depth; Payload hooks alone do not
 constrain direct SQL or a table-owning principal.
+
+Actor and target provenance is enforced before this persistence boundary. The
+flat append record remains structurally validated here as defense in depth, but
+structural parser success is not authority to append.
