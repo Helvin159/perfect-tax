@@ -1,24 +1,12 @@
-import { readdirSync, readFileSync } from 'node:fs';
-import { relative, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
 const infrastructureDirectory = fileURLToPath(new URL('.', import.meta.url));
-const sourceDirectory = fileURLToPath(new URL('../../../', import.meta.url));
 
 function source(name: string): string {
   return readFileSync(new URL(name, import.meta.url), 'utf8');
-}
-
-function productionTypeScriptFiles(directory: string): string[] {
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const path = resolve(directory, entry.name);
-    if (entry.isDirectory()) return productionTypeScriptFiles(path);
-    return /\.(?:ts|tsx)$/u.test(entry.name) && !entry.name.endsWith('.test.ts')
-      ? [path]
-      : [];
-  });
 }
 
 describe('attested Payload gateway architecture boundary', () => {
@@ -31,20 +19,18 @@ describe('attested Payload gateway architecture boundary', () => {
     expect(portalSource).not.toMatch(/\bpayload\s*:\s*Payload\b/u);
   });
 
-  it('does not export a general principal or capability minting primitive', () => {
+  it('keeps the portal registry, issuer, resolver, and composition private', () => {
     const portalSource = source('portal-payload-gateway.ts');
 
-    for (const prohibitedExport of [
-      'createTrustedPrincipal',
-      'markTrusted',
-      'createCapability',
-      'TRUSTED_SYMBOL',
-    ]) {
-      expect(portalSource).not.toMatch(
-        new RegExp(`export\\s+(?:function|const|class)\\s+${prohibitedExport}`),
-      );
-    }
-    expect(portalSource).not.toMatch(/export\s+function\s+attest\b/u);
+    expect(portalSource).not.toMatch(
+      /export\s+function\s+composePortalPayloadGatewayWithPrincipalResolver\b/u,
+    );
+    expect(portalSource).not.toMatch(
+      /export\s+(?:interface|type)\s+TrustedPortalPrincipalResolver\b/u,
+    );
+    expect(portalSource).not.toMatch(
+      /export\s+(?:const|function)\s+(?:issuePortalOperation|portalAttestations)\b/u,
+    );
     expect(portalSource).toContain(
       "const portalCapabilityContextKey = 'portalPayloadCapability'",
     );
@@ -53,9 +39,18 @@ describe('attested Payload gateway architecture boundary', () => {
     );
   });
 
-  it('keeps the system gateway Payload-free and operation-specific', () => {
+  it('keeps the system registry, issuer, resolvers, composition, and audit sources private', () => {
     const systemSource = source('system-payload-gateway.ts');
 
+    expect(systemSource).not.toMatch(
+      /export\s+function\s+composePrimaryOwnerBootstrapSystemGateway\b/u,
+    );
+    expect(systemSource).not.toMatch(
+      /export\s+(?:interface|type)\s+TrustedPrimaryOwner(?:BootstrapSource|Target)Resolver\b/u,
+    );
+    expect(systemSource).not.toMatch(
+      /export\s+(?:const|function)\s+(?:systemCapabilities|systemAuditSources|createAuditSource)\b/u,
+    );
     expect(systemSource).not.toMatch(/\bgetPayload\s*\(/u);
     expect(systemSource).not.toContain('overrideAccess: true');
     expect(systemSource).not.toContain('bypass-all');
@@ -64,35 +59,13 @@ describe('attested Payload gateway architecture boundary', () => {
     expect(systemSource).toContain("'primary-owner-bootstrap'");
   });
 
-  it('allows composition factories only at their named trusted roots', () => {
-    const allowedPortalCompositionFiles = new Set([
-      'modules/auth/portal-principal-composition.ts',
-      'modules/authorization/infrastructure/portal-payload-gateway.ts',
-    ]);
-    const allowedSystemCompositionFiles = new Set([
-      'modules/authorization/infrastructure/system-payload-gateway.ts',
-      'modules/staff/application/primary-owner-bootstrap.ts',
-    ]);
-    const violations: string[] = [];
+  it('marks source inspection as defense in depth rather than the runtime control', () => {
+    const readme = source('README.md');
 
-    for (const file of productionTypeScriptFiles(sourceDirectory)) {
-      const relativePath = relative(sourceDirectory, file);
-      const contents = readFileSync(file, 'utf8');
-      if (
-        contents.includes('composePortalPayloadGatewayWithPrincipalResolver') &&
-        !allowedPortalCompositionFiles.has(relativePath)
-      ) {
-        violations.push(`portal:${relativePath}`);
-      }
-      if (
-        contents.includes('composePrimaryOwnerBootstrapSystemGateway') &&
-        !allowedSystemCompositionFiles.has(relativePath)
-      ) {
-        violations.push(`system:${relativePath}`);
-      }
-    }
-
-    expect(violations).toEqual([]);
+    expect(readme).toContain('defense in depth only');
+    expect(readme).toContain(
+      'JavaScript\nmodule-private state plus the absence of any exported issuance call path',
+    );
   });
 
   it('keeps all Agent 10 implementation files in the owned infrastructure directory', () => {

@@ -1,3 +1,5 @@
+/// <reference types="vitest/importMeta" />
+
 import 'server-only';
 
 import type {
@@ -89,12 +91,11 @@ export class PortalPayloadPersistenceError extends Error {
 }
 
 /**
- * Agent 11 implements this interface with an opaque source that it recognizes
- * through its server-validated session/domain resolver. Feature code must
- * receive the composed gateway, never this resolver or the composition
- * factory.
+ * Agent 11 completes this same module with its concrete session/domain
+ * resolver. Keeping the interface and composition private prevents feature
+ * code from substituting a resolver.
  */
-export interface TrustedPortalPrincipalResolver<Source extends object> {
+interface TrustedPortalPrincipalResolver<Source extends object> {
   resolveCanonicalPrincipal(
     source: Source,
   ): PortalPrincipal | undefined | Promise<PortalPrincipal | undefined>;
@@ -414,11 +415,11 @@ function revokePortalOperation(token: object): void {
 }
 
 /**
- * Narrow Agent 11 composition seam. It never returns a token or accepts a
- * principal-shaped value directly. The resolver must recognize its own
- * opaque, server-only source and return canonical domain facts.
+ * Private Agent 11 composition seam. Agent 11 must directly import its
+ * concrete resolver into this module and close over it here. Exporting this
+ * function, either dependency, or the issuer would reopen portal authority.
  */
-export function composePortalPayloadGatewayWithPrincipalResolver<
+function composePortalPayloadGatewayWithPrincipalResolver<
   PrincipalSource extends object,
 >(
   payload: Pick<Payload, 'find' | 'findByID'>,
@@ -531,4 +532,377 @@ export function requireAttestedPortalRequest(
     throw new PortalPayloadAuthorizationError('invalid-principal');
   }
   return resolved;
+}
+
+if (import.meta.vitest) {
+  const { describe, expect, it, vi } = import.meta.vitest;
+
+  type TestPrincipalSource = Readonly<{ opaque: string }>;
+
+  const clientRecords = [
+    {
+      clientNumber: 'CL-7F4K-92MX',
+      contactEmail: 'client-a@example.test',
+      firstName: 'Ada',
+      id: 101,
+      lastName: 'Lovelace',
+      relatedClient: 202,
+      secretTaxValue: 'must-not-leak',
+      status: 'active',
+    },
+    {
+      clientNumber: 'CL-8G5M-93NX',
+      contactEmail: 'client-b@example.test',
+      firstName: 'Grace',
+      id: 202,
+      lastName: 'Hopper',
+      relatedClient: 101,
+      secretTaxValue: 'must-not-leak-either',
+      status: 'active',
+    },
+  ] as const;
+
+  function requiredTestPrincipal(value: unknown): PortalPrincipal {
+    const principal = parsePortalPrincipal(value);
+    if (!principal) throw new Error('Invalid test principal');
+    return principal;
+  }
+
+  const owner = requiredTestPrincipal({
+    authUserId: 'auth-owner',
+    kind: 'staff',
+    mfaAssurance: 'verified',
+    role: 'owner',
+    staffId: 11,
+    status: 'active',
+  });
+  const client = requiredTestPrincipal({
+    authUserId: 'auth-client-a',
+    clientId: 101,
+    kind: 'client',
+    status: 'active',
+  });
+  const caseWorker = requiredTestPrincipal({
+    authUserId: 'auth-case-worker',
+    kind: 'staff',
+    mfaAssurance: 'verified',
+    role: 'case-worker',
+    staffId: 22,
+    status: 'active',
+  });
+  const enrollment = requiredTestPrincipal({
+    allowedOperations: ['enroll-mfa', 'verify-mfa', 'sign-out'],
+    authUserId: 'auth-enrollment',
+    kind: 'staff-enrollment',
+    staffId: 33,
+  });
+
+  function createPrivatePortalHarness() {
+    const bindings = new WeakMap<object, PortalPrincipal>();
+    const requests: Array<Record<string, unknown>> = [];
+    const requestObservers: Array<(req: Record<string, unknown>) => void> = [];
+
+    const find = vi.fn(async (options: Record<string, unknown>) => {
+      const req = {
+        context: { ...(options.context as Record<string, unknown>) },
+        payloadDataLoader: new Map<string, unknown>(),
+        transactionID: `transaction-${requests.length + 1}`,
+        user: options.user,
+      };
+      requests.push(req);
+
+      const access = await authorizePortalClientRead({ req } as never);
+      if (access === false) throw new Error('Forbidden');
+      if (!(await authorizePortalClientFieldRead({ req } as never))) {
+        throw new Error('Forbidden field');
+      }
+      for (const observer of requestObservers) observer(req);
+
+      const docs =
+        access === true
+          ? clientRecords
+          : clientRecords.filter(
+              (record) =>
+                record.id === (access as { id: { equals: number } }).id.equals,
+            );
+      return { docs };
+    });
+
+    const findByID = vi.fn(async (options: Record<string, unknown>) => {
+      const req = {
+        context: { ...(options.context as Record<string, unknown>) },
+        payloadDataLoader: new Map<string, unknown>(),
+        transactionID: `transaction-${requests.length + 1}`,
+        user: options.user,
+      };
+      requests.push(req);
+
+      const access = await authorizePortalClientRead({ req } as never);
+      if (access === false) throw new Error('Forbidden');
+      if (!(await authorizePortalClientFieldRead({ req } as never))) {
+        throw new Error('Forbidden field');
+      }
+      for (const observer of requestObservers) observer(req);
+
+      const record = clientRecords.find(
+        (candidate) => candidate.id === options.id,
+      );
+      if (!record) throw new Error('Not found');
+      return record;
+    });
+
+    const gateway = composePortalPayloadGatewayWithPrincipalResolver(
+      { find, findByID } as unknown as Pick<Payload, 'find' | 'findByID'>,
+      {
+        resolveCanonicalPrincipal: (source: TestPrincipalSource) =>
+          bindings.get(source),
+      },
+    );
+
+    return {
+      bindings,
+      find,
+      findByID,
+      gateway,
+      requestObservers,
+      requests,
+      trust(principal: PortalPrincipal): TestPrincipalSource {
+        const source = Object.freeze({ opaque: crypto.randomUUID() });
+        bindings.set(source, principal);
+        return source;
+      },
+    };
+  }
+
+  describe('private portal capability composition', () => {
+    it('keeps fixed Payload arguments and narrow projections for trusted Owner and Client calls', async () => {
+      const harness = createPrivatePortalHarness();
+      const ownerResult = await harness.gateway.listClientSummaries(
+        harness.trust(owner),
+      );
+      const clientResult = await harness.gateway.readOwnClientProfile(
+        harness.trust(client),
+      );
+
+      expect(ownerResult).toEqual([
+        {
+          clientNumber: 'CL-7F4K-92MX',
+          firstName: 'Ada',
+          id: 101,
+          lastName: 'Lovelace',
+          status: 'active',
+        },
+        {
+          clientNumber: 'CL-8G5M-93NX',
+          firstName: 'Grace',
+          id: 202,
+          lastName: 'Hopper',
+          status: 'active',
+        },
+      ]);
+      expect(clientResult).toEqual({
+        clientNumber: 'CL-7F4K-92MX',
+        contactEmail: 'client-a@example.test',
+        firstName: 'Ada',
+        id: 101,
+        lastName: 'Lovelace',
+        status: 'active',
+      });
+      expect(JSON.stringify(ownerResult)).not.toContain('secretTaxValue');
+      expect(JSON.stringify(ownerResult)).not.toContain('relatedClient');
+      expect(harness.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          collection: 'clients',
+          depth: 0,
+          overrideAccess: false,
+          select: {
+            clientNumber: true,
+            firstName: true,
+            lastName: true,
+            status: true,
+          },
+        }),
+      );
+      expect(harness.find.mock.calls[0]?.[0]).not.toHaveProperty('req');
+      expect(harness.findByID).toHaveBeenCalledWith(
+        expect.objectContaining({
+          depth: 0,
+          id: 101,
+          overrideAccess: false,
+          select: {
+            clientNumber: true,
+            contactEmail: true,
+            firstName: true,
+            lastName: true,
+            status: true,
+          },
+        }),
+      );
+    });
+
+    it('denies parsed, frozen, serialized, reconstructed, enrollment, and unassigned sources', async () => {
+      const harness = createPrivatePortalHarness();
+      const genuineOwnerSource = harness.trust(owner);
+
+      for (const fake of [
+        owner,
+        Object.freeze({ ...owner }),
+        JSON.parse(JSON.stringify(genuineOwnerSource)),
+        JSON.parse(JSON.stringify(owner)),
+        { ...client },
+      ]) {
+        await expect(
+          harness.gateway.listClientSummaries(fake as never),
+        ).rejects.toMatchObject({ code: 'invalid-principal' });
+      }
+
+      await expect(
+        harness.gateway.listClientSummaries(harness.trust(enrollment)),
+      ).rejects.toMatchObject({ code: 'invalid-principal' });
+      await expect(
+        harness.gateway.listClientSummaries(harness.trust(caseWorker)),
+      ).rejects.toMatchObject({ code: 'assignment-required' });
+      expect(harness.find).not.toHaveBeenCalled();
+    });
+
+    it('rejects caller ownership/assignment arguments and exact-user/request substitution', async () => {
+      const harness = createPrivatePortalHarness();
+      const clientSource = harness.trust(client);
+
+      await expect(
+        (
+          harness.gateway.readOwnClientProfile as unknown as (
+            source: TestPrincipalSource,
+            clientId: number,
+          ) => Promise<unknown>
+        )(clientSource, 202),
+      ).rejects.toMatchObject({ code: 'invalid-principal' });
+      await expect(
+        (
+          harness.gateway.listClientSummaries as unknown as (
+            source: TestPrincipalSource,
+            assignment: object,
+          ) => Promise<unknown>
+        )(harness.trust(caseWorker), { assignedStaffIds: [22] }),
+      ).rejects.toMatchObject({ code: 'invalid-principal' });
+
+      harness.requestObservers.push((req) => {
+        expect(resolveAttestedPortalRequest(req)?.principal).toEqual(client);
+        expect(
+          resolveAttestedPortalRequest({ ...req, context: req.context }),
+        ).toBeUndefined();
+        expect(
+          resolveAttestedPortalRequest({
+            context: req.context,
+            user: { ...(req.user as object), extra: true },
+          }),
+        ).toBeUndefined();
+        expect(
+          resolveAttestedPortalRequest({
+            context: JSON.parse(JSON.stringify(req.context)),
+            user: req.user,
+          }),
+        ).toBeUndefined();
+      });
+
+      await harness.gateway.readOwnClientProfile(clientSource);
+      const retainedRequest = harness.requests[0];
+      if (!retainedRequest) throw new Error('Missing retained request');
+      expect(resolveAttestedPortalRequest(retainedRequest)).toBeUndefined();
+    });
+
+    it('revokes capabilities in finally and creates fresh request isolation state', async () => {
+      const harness = createPrivatePortalHarness();
+      const source = harness.trust(owner);
+      await harness.gateway.listClientSummaries(source);
+      await harness.gateway.listClientSummaries(source);
+
+      const first = harness.requests[0];
+      const second = harness.requests[1];
+      if (!first || !second) throw new Error('Missing requests');
+      expect(first).not.toBe(second);
+      expect(first.context).not.toBe(second.context);
+      expect(first.payloadDataLoader).not.toBe(second.payloadDataLoader);
+      expect(Object.values(first.context as object)[0]).not.toBe(
+        Object.values(second.context as object)[0],
+      );
+      expect(resolveAttestedPortalRequest(first)).toBeUndefined();
+      expect(resolveAttestedPortalRequest(second)).toBeUndefined();
+
+      let failedRequest: Record<string, unknown> | undefined;
+      const failingGateway = composePortalPayloadGatewayWithPrincipalResolver(
+        {
+          find: vi.fn(async (options: Record<string, unknown>) => {
+            failedRequest = {
+              context: { ...(options.context as Record<string, unknown>) },
+              user: options.user,
+            };
+            expect(resolveAttestedPortalRequest(failedRequest)).toBeDefined();
+            throw new Error('persistence unavailable');
+          }),
+          findByID: vi.fn(),
+        } as unknown as Pick<Payload, 'find' | 'findByID'>,
+        { resolveCanonicalPrincipal: () => owner },
+      );
+      await expect(
+        failingGateway.listClientSummaries({ opaque: 'private-source' }),
+      ).rejects.toThrow('persistence unavailable');
+      expect(resolveAttestedPortalRequest(failedRequest)).toBeUndefined();
+    });
+
+    it('preserves the token through Payload createLocalReq but rejects a copied request', async () => {
+      const { createLocalReq } = await import('payload');
+      let actualRequest: Awaited<ReturnType<typeof createLocalReq>> | undefined;
+      let copiedRequestRejected = false;
+      const fakePayload = {
+        config: {
+          admin: { user: 'cms-users' },
+          localization: false,
+          serverURL: 'http://localhost:3001',
+        },
+      } as unknown as Payload;
+      const payloadPort = {
+        find: vi.fn(async (options: Record<string, unknown>) => {
+          actualRequest = await createLocalReq(
+            {
+              context: options.context as never,
+              depth: 0,
+              req: {
+                i18n: { t: (key: string) => key },
+                payloadDataLoader: new Map(),
+              } as never,
+              user: options.user as never,
+            },
+            fakePayload,
+          );
+          expect(resolveAttestedPortalRequest(actualRequest)).toBeDefined();
+
+          const copiedRequest = await createLocalReq(
+            {
+              context: options.context as never,
+              depth: 0,
+              req: {
+                i18n: { t: (key: string) => key },
+                payloadDataLoader: new Map(),
+              } as never,
+              user: options.user as never,
+            },
+            fakePayload,
+          );
+          copiedRequestRejected =
+            resolveAttestedPortalRequest(copiedRequest) === undefined;
+          return { docs: [] };
+        }),
+        findByID: vi.fn(),
+      };
+      const gateway = composePortalPayloadGatewayWithPrincipalResolver(
+        payloadPort as unknown as Pick<Payload, 'find' | 'findByID'>,
+        { resolveCanonicalPrincipal: () => owner },
+      );
+
+      await gateway.listClientSummaries({ opaque: 'private-source' });
+      expect(copiedRequestRejected).toBe(true);
+      expect(resolveAttestedPortalRequest(actualRequest)).toBeUndefined();
+    });
+  });
 }

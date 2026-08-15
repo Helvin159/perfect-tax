@@ -65,7 +65,6 @@ export type PrincipalSecurityEventRequest<TargetSource extends object> = {
 
 export type SystemSecurityEventRequest = Readonly<{
   action: SystemSecurityEventAction;
-  correlationId?: string;
 }>;
 
 /**
@@ -85,6 +84,7 @@ export interface TrustedTargetSourceResolver<TargetSource extends object> {
 }
 
 export type TrustedSystemEventProvenance = Readonly<{
+  correlationId: string;
   operation: 'primary-owner-bootstrap';
   reasonCode: SystemEventReasonCode;
   target?: SecurityEventTarget;
@@ -220,9 +220,7 @@ function assertSystemRequest(request: unknown): asserts request is Readonly<
 } {
   if (
     !isRecord(request) ||
-    !Object.keys(request).every((key) =>
-      ['action', 'correlationId'].includes(key),
-    ) ||
+    !Object.keys(request).every((key) => key === 'action') ||
     !Object.hasOwn(request, 'action') ||
     typeof request.action !== 'string' ||
     !systemActionSet.has(request.action)
@@ -237,8 +235,9 @@ function isTrustedSystemProvenance(
   if (
     !isRecord(value) ||
     !Object.keys(value).every((key) =>
-      ['operation', 'reasonCode', 'target'].includes(key),
+      ['correlationId', 'operation', 'reasonCode', 'target'].includes(key),
     ) ||
+    typeof value.correlationId !== 'string' ||
     !isSystemOperation(value.operation) ||
     typeof value.reasonCode !== 'string' ||
     !systemReasonCodeSet.has(value.reasonCode)
@@ -340,9 +339,7 @@ export function createSecurityEventRecorders<
       const input = parseSecurityEventInput({
         action: unsafeRequest.action,
         actor: { kind: 'system' },
-        ...(unsafeRequest.correlationId === undefined
-          ? {}
-          : { correlationId: unsafeRequest.correlationId }),
+        correlationId: provenance.correlationId,
         metadata: {
           operation: provenance.operation,
           reasonCode: provenance.reasonCode,

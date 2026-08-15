@@ -1,132 +1,162 @@
-# Attested Payload gateway
+# Attested Payload gateways
 
-This directory is the Slice 1 security choke point for user-driven Payload
-operations. It implements ADR 0010's runtime capability protocol without
-changing Payload Admin, `cms-users`, collection registration, schemas, or
-migrations.
+This directory is Agent 10's server-only authorization choke point. Agent 10
+currently contains the capability registries, issuers, verifiers, fixed Payload
+ports, Agent 8 policy integration, and the audited system-operation envelope.
+It intentionally exports no production portal or system gateway capable of
+minting authority. Production issuance remains fail closed until Agents 11 and
+12 complete the concrete compositions in these same modules.
 
-## Runtime trust model
+## Portal capability boundary
 
-`portal-payload-gateway.ts` owns a module-private `WeakMap`. A fresh frozen
-token is registered only after the injected Agent 11 resolver recognizes its
-own opaque server-side source and returns a canonical operational principal.
-The token is placed under an enumerable string key in Local API context. The
-key is not secret; object identity in the private registry is the capability.
+`portal-payload-gateway.ts` owns module-private `WeakMap` registries. Its
+private composition function resolves an opaque source, creates a fresh frozen
+token, and registers the canonical operational principal, narrow
+`PortalPayloadUser`, canonical Client ownership evidence, and first Payload
+request object. The issuer, resolver interface, composition function, and
+registries are not exported.
 
-Each binding contains:
+The exported collection/field access functions can only verify a token already
+present in the private registry. A token-like object, context property name,
+role string, parsed/frozen/serialized/reconstructed principal, matching user,
+or copied request establishes no authority. Every private gateway operation
+revokes its token and ownership evidence in `finally`.
 
-- one frozen active Staff/MFA-verified or active Client principal;
-- one minimal `PortalPayloadUser` with the explicit `portal-principals`
-  discriminator;
-- Client self-ownership evidence, when the canonical principal is a Client;
-- and the first Payload request object on which the token is observed.
+The private gateway owns `overrideAccess: false`, `depth: 0`, the collection,
+the narrow user, context, pagination, sort, IDs, and fixed projections. It
+accepts no caller-controlled Payload request, user, context, select, depth,
+relationship population, assignment evidence, or ownership evidence. Agent 8
+policy decisions remain authoritative; Case Worker access fails closed because
+Slice 1 has no canonical assignment persistence.
 
-Access succeeds only when the token is registered, the complete narrow user
-exactly matches the binding, and the request is the binding's original request.
-JSON reconstruction, matching fields, TypeScript brands, `Object.freeze`, role
-strings, IDs, and context property names do not establish trust. A token copied
-to another request is rejected, which also prevents its request-scoped
-DataLoader or transaction lineage from being transferred. The registry entry
-is revoked when the top-level gateway call settles, including denial and
-persistence-error paths.
+Current portal runtime exports are verification and collection-composition
+utilities only:
 
-Every top-level gateway method omits `req`, creates a fresh user/context/token,
-sets `overrideAccess: false` and `depth: 0`, and owns a fixed select. Caller
-options, arbitrary queries, relationships, joins, population, field names,
-Payload users, and context are not accepted.
+- `PortalPayloadAuthorizationError` and `PortalPayloadPersistenceError`:
+  errors; neither issues nor verifies authority.
+- `resolveAttestedPortalRequest`: verifies a registered capability, exact user,
+  and exact request binding; it cannot register a capability.
+- `authorizePortalClientRead` and `authorizePortalClientFieldRead`: verify the
+  private capability and apply Agent 8 policy.
+- `portalClientCollectionAccess` and `portalClientFieldAccess`: frozen,
+  fail-closed access contracts built from those verifiers.
+- `requireAttestedPortalRequest`: verifier that throws on denial.
 
-## Agent 11 integration
+The type-only DTO, narrow gateway, and Payload-user exports carry no runtime
+issuance path.
 
-Agent 11 must implement
-`TrustedPortalPrincipalResolver<OpaqueAgent11Source>` at the server composition
-root in `src/modules/auth/portal-principal-composition.ts`. The focused
-architecture test rejects imports of the composition factory from any other
-production file. The source must itself be recognized using Agent 11's private
-runtime state after all of these canonical checks:
+## Agent 11 handoff
+
+Agent 11 may complete `portal-payload-gateway.ts`; it must not create a second
+composition module or export the private factory. The completed module must
+directly import Agent 11's concrete
+`resolveCanonicalPortalPrincipalFromSession` implementation from
+`src/modules/auth/portal-principal-composition.ts`, close over it with the
+existing private issuer, and export only the final narrowed portal gateway (or
+its fixed operations). There must be no resolver/predicate/dependency argument
+on that final export.
+
+The concrete resolver must establish, in order:
 
 1. Better Auth validates the live session and yields its immutable
    `AuthUserId`.
-2. PortalIdentity resolves exactly one matching Staff or Client binding.
-3. The bound domain record exists and has an eligible status.
-4. Staff is `active` and carries application-verified MFA assurance.
-5. Client is `active`; Slice 1 still provisions no Client credentials.
+2. Exactly one `PortalIdentity` binds that auth user to Staff or Client.
+3. The canonical Staff/Client record exists and is eligible.
+4. Staff is active and has application-verified MFA assurance.
+5. Client is active; Agent 11 must not infer ownership from caller input.
 
-Compose once with
-`composePortalPayloadGatewayWithPrincipalResolver(payload, resolver)`. Give
-application services only the resulting `PortalPayloadGateway`; do not export
-the resolver, composition dependencies, Payload object, session token, or an
-attestation helper. Gateway methods receive only the opaque Agent 11 source.
-They never receive a browser principal or a principal-shaped object.
+Only after those facts resolve may the existing private issuer register a
+capability. Enrollment, inactive/disabled, missing, duplicated, malformed, or
+throwing resolution fails before Payload. Agent 11 must not export a generic
+resolver-driven gateway factory, principal attester, or capability issuer.
 
-The composition factory is the narrow issuance seam. It does not accept a
-principal directly and never returns a token. It is intentionally not re-
-exported through a general authorization barrel. An enrollment principal,
-disabled/inactive subject, malformed resolver output, missing source, or
-throwing resolver is rejected before Payload runs.
+## System capability and audit boundary
 
-One gateway call is one top-level Payload request. Agent 11 and feature code
-must not retain a `PayloadRequest`, context, token, DataLoader, or transaction
-for another call or principal.
+`system-payload-gateway.ts` owns separate private `WeakMap` namespaces for the
+system request capability and Agent 7 audit provenance. Its source resolver,
+target resolver, audit-source type, audit resolver, composition function, and
+gateway are all private. The application Owner role has no conversion path to
+a system capability.
 
-## Agent 12 integration
+The bounded private envelope validates the sole operation
+`primary-owner-bootstrap`, the fixed reason
+`initial-primary-owner-provisioning`, and a UUID correlation ID before issuing
+the request capability. The privileged callback receives only the fixed
+operation/reason and request context. It never receives an audit source,
+recorder, capability object, or correlation control.
 
-`composePrimaryOwnerBootstrapSystemGateway` is separate from every Staff role.
-Agent 12 composes it only from
-`src/modules/staff/application/primary-owner-bootstrap.ts`; the architecture
-test rejects other production imports. Agent 12 supplies two private resolvers:
+The envelope owns terminal auditing:
 
-- a non-web invocation source that resolves only to
-  `primary-owner-bootstrap`; and
-- a canonical create-result source that resolves to the newly created primary
-  owner Staff ID.
+- A successful action must return a target source recognized by the private
+  target resolver. The envelope appends exactly one
+  `primary-owner.bootstrap.succeeded` event before returning the result.
+- A thrown action or invalid target appends exactly one
+  `primary-owner.bootstrap.failed` event before propagating the failure.
+- If the required append fails, the invocation fails closed. A failed success
+  append does not trigger a second terminal-event attempt, avoiding an
+  accidental success/failure pair.
 
-The returned gateway opens a bounded asynchronous scope requiring the exact
-`initial-primary-owner-provisioning` reason code and a UUID correlation/job/
-request ID. Inside the scope, Agent 12 may pass `scope.context` to its one
-allowlisted Payload create and use `authorizePrimaryOwnerBootstrap` when
-constructing `createStaffCollection`. The capability binds to the first
-Payload request and is revoked when the callback ends.
+The validated correlation ID is stored only in trusted system provenance.
+Agent 7's system recorder request accepts only the action and copies correlation
+from that provenance, so the callback cannot omit or replace it. Event actor,
+operation, reason, and success target are also server derived. Capability,
+principal, credential/session/MFA material, full request bodies, and private
+Client data never enter the event request.
 
-The scope supplies a targetless failure audit source and can derive a success
-audit source only through the trusted target resolver. Pass the returned
-`auditSourceResolver` to Agent 7's recorder and record the event before the
-scope ends. Agent 10 does not create the Staff record, credentials,
-PortalIdentity, MFA enrollment, advisory lock, transaction, or CLI.
+This contract prevents a successful return without the audit append. It does
+not yet claim database atomicity: Agent 12/14 must put the privileged writes
+and SecurityEvent append in the same database transaction so append failure
+also rolls back the write.
 
-## Agent 13 collection composition
+Current system runtime exports are non-issuing:
 
-**Clients must not be registered unchanged.** Its current collection has no
-fail-closed access configuration.
+- `SYSTEM_PAYLOAD_GATEWAY_ERROR_CODES` and
+  `SystemPayloadGatewayAuthorizationError`: vocabulary/error only.
+- `authorizePrimaryOwnerBootstrapRequest`: verifies a private capability and
+  exact request binding; it cannot issue one.
+- `isPrimaryOwnerBootstrapOperation`: validates the one-operation vocabulary;
+  it conveys no authority.
 
-Agent 13 must create the reviewed private collection registration and attach:
+`PrimaryOwnerBootstrapRequest` and error-code exports are type-only where
+applicable and cannot mint authority.
 
-- `portalClientCollectionAccess` as the collection access contract;
-- `portalClientFieldAccess.read` only to fields approved for portal response;
-- explicit denial for unimplemented mutation paths; and
-- `requireAttestedPortalRequest(req)` in any security-sensitive hook before a
-  side effect or nested operation.
+## Agent 12 handoff
 
-The current gateway projections contain only Client summary fields and the
-current Client's own contact email. Do not attach portal field access to future
-relationships, joins, private tax data, documents, assignments, credentials,
-or identity fields without a separate review. Nested operations must pass the
-same `req`; no hook may substitute user/context/principal data. Relationship
-fields must remain outside selects even at depth zero because raw IDs can leak.
+Agent 12 may complete `system-payload-gateway.ts`. It must directly import its
+concrete private, non-web `primary-owner-bootstrap` invocation resolver and the
+canonical created-Staff target resolver into that module, then construct Agent
+7's real Payload-backed recorder against the module-private audit resolver.
+The existing issuer and composition function remain unexported. The final
+export may expose only the narrowed audited bootstrap operation and the request
+authorization verifier needed by the Staff collection composition.
 
-Agent 13 remains responsible for registration and any CMS-side collection
-composition. CMS users do not pass these portal access functions, and a portal
-user is never a `cms-users` identity.
+Agent 12 owns Staff creation, Better Auth credentials, PortalIdentity creation,
+advisory locking, transaction integration, CLI behavior, and MFA enrollment.
+It must not create a parallel capability, resolver-injection factory, optional
+audit path, or role-to-system-capability conversion. The sole current system
+operation remains `primary-owner-bootstrap`.
 
-## Agent 14 database handoff
+## Test-only private composition
 
-This gateway assumes only the existing numeric `ClientId`/`StaffId` contracts
-and the existing `clients` collection slug. It adds no table, field, index,
-constraint, role, grant, migration, generated Payload type, or physical-schema
-decision. Agent 14 must not infer a schema-ownership choice from this module.
+Successful issuance behavior is tested in source under `import.meta.vitest`.
+Vitest injects that module-local test API only for the two explicitly listed
+Agent 10 source files. Normal production imports expose none of the private
+factories or test dependencies, and another module cannot set another module's
+`import.meta`. The ordinary `.test.ts` consumers import the complete runtime
+namespaces and prove that fake resolvers, valid-looking Owner/Client values,
+lookalike contexts, and source declarations cannot reach an issuer.
 
-Database-backed collection access, hooks, relationship population, and
-transaction propagation tests remain an integration step after Agent 13
-registration and Agent 14 migrations exist. The maintained unit tests here
-cover the production capability checks, fixed Local API arguments, Payload
-3.86 `createLocalReq` token propagation, request/DataLoader isolation contract,
-nested same-request behavior, and cross-request rejection.
+The source/import architecture test is defense in depth only. JavaScript
+module-private state plus the absence of any exported issuance call path is the
+runtime security boundary.
+
+## Agent 13 and Agent 14 notes
+
+Agent 13 must register Clients with the exported fail-closed collection and
+field contracts, explicitly deny unimplemented mutations, and preserve the
+same request object through security-sensitive hooks. CMS users remain outside
+this portal identity path.
+
+Agent 14 remains responsible for physical schema and transaction decisions.
+Agent 10 adds no table, field, index, constraint, grant, migration, generated
+Payload type, or PostgreSQL integration claim.
