@@ -324,6 +324,12 @@ describe('Better Auth core runtime', () => {
     ]);
 
     expect(authRoute).toContain("from '@/modules/auth/runtime'");
+    expect(authRoute).toContain(
+      "from '@/modules/auth/portal-principal-composition'",
+    );
+    expect(authRoute).toContain(
+      'isStaffMfaSubject: isCanonicalActiveStaffMfaSubject',
+    );
     expect(cmsRoute).toContain("from '@payloadcms/next/routes'");
     expect(payloadConfig).toContain("user: 'cms-users'");
     expect(payloadConfig).toContain("api: '/api/cms'");

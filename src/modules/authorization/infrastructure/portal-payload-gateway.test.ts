@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
+vi.mock('@/modules/auth/portal-principal-composition', () => ({
+  resolveCanonicalPortalPrincipalFromSession: vi.fn(async () => ({
+    outcome: 'denied',
+  })),
+}));
 
 import * as portalGatewayExports from './portal-payload-gateway';
 
@@ -55,6 +60,7 @@ describe('Agent 10 portal production export closure', () => {
       'authorizePortalClientRead',
       'portalClientCollectionAccess',
       'portalClientFieldAccess',
+      'portalPayloadGateway',
       'requireAttestedPortalRequest',
       'resolveAttestedPortalRequest',
     ]);
@@ -120,6 +126,24 @@ describe('Agent 10 portal production export closure', () => {
 
     expect(payload.find).not.toHaveBeenCalled();
     expect(payload.findByID).not.toHaveBeenCalled();
+  });
+
+  it('denies fake, serialized, and reconstructed principals at the final production gateway', async () => {
+    for (const source of [
+      owner,
+      client,
+      JSON.parse(JSON.stringify(owner)),
+      Object.freeze({
+        resolveCanonicalPrincipal: () => owner,
+        trusted: true,
+      }),
+    ]) {
+      await expect(
+        portalGatewayExports.portalPayloadGateway.listClientSummaries(
+          source as never,
+        ),
+      ).rejects.toMatchObject({ code: 'invalid-principal' });
+    }
   });
 
   it('keeps all exported Client mutation contracts fail closed', () => {

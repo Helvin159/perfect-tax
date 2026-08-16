@@ -1,11 +1,10 @@
 # Attested Payload gateways
 
-This directory is Agent 10's server-only authorization choke point. Agent 10
-currently contains the capability registries, issuers, verifiers, fixed Payload
-ports, Agent 8 policy integration, and the audited system-operation envelope.
-It intentionally exports no production portal or system gateway capable of
-minting authority. Production issuance remains fail closed until Agents 11 and
-12 complete the concrete compositions in these same modules.
+This directory is Agent 10's server-only authorization choke point. It contains
+the capability registries, issuers, verifiers, fixed Payload ports, Agent 8
+policy integration, and the audited system-operation envelope. Agent 11 has
+completed the portal composition in this same module. System issuance remains
+fail closed until Agent 12 completes its separate concrete composition.
 
 ## Portal capability boundary
 
@@ -23,14 +22,16 @@ or copied request establishes no authority. Every private gateway operation
 revokes its token and ownership evidence in `finally`.
 
 The private gateway owns `overrideAccess: false`, `depth: 0`, the collection,
-the narrow user, context, pagination, sort, IDs, and fixed projections. It
-accepts no caller-controlled Payload request, user, context, select, depth,
-relationship population, assignment evidence, or ownership evidence. Agent 8
-policy decisions remain authoritative; Case Worker access fails closed because
-Slice 1 has no canonical assignment persistence.
+the narrow user, context, pagination, sort, IDs, and fixed projections. Its
+private concrete Payload port resolves the configured Payload runtime and is
+not exported or injectable. The gateway accepts no caller-controlled Payload
+request, instance, user, context, select, depth, relationship population,
+assignment evidence, or ownership evidence. Agent 8 policy decisions remain
+authoritative; Case Worker access fails closed because Slice 1 has no canonical
+assignment persistence.
 
-Current portal runtime exports are verification and collection-composition
-utilities only:
+Current portal runtime exports are verification, collection-composition, and
+one final operational entrypoint only:
 
 - `PortalPayloadAuthorizationError` and `PortalPayloadPersistenceError`:
   errors; neither issues nor verifies authority.
@@ -41,22 +42,17 @@ utilities only:
 - `portalClientCollectionAccess` and `portalClientFieldAccess`: frozen,
   fail-closed access contracts built from those verifiers.
 - `requireAttestedPortalRequest`: verifier that throws on denial.
+- `portalPayloadGateway`: the fixed production gateway. Its methods accept only
+  request `Headers`; every invocation calls Agent 11's concrete resolver before
+  the module-private Agent 10 issuer is reachable.
 
 The type-only DTO, narrow gateway, and Payload-user exports carry no runtime
 issuance path.
 
-## Agent 11 handoff
+## Agent 11 closed composition
 
-Agent 11 may complete `portal-payload-gateway.ts`; it must not create a second
-composition module or export the private factory. The completed module must
-directly import Agent 11's concrete
-`resolveCanonicalPortalPrincipalFromSession` implementation from
-`src/modules/auth/portal-principal-composition.ts`, close over it with the
-existing private issuer, and export only the final narrowed portal gateway (or
-its fixed operations). There must be no resolver/predicate/dependency argument
-on that final export.
-
-The concrete resolver must establish, in order:
+`src/modules/auth/portal-principal-composition.ts` is the concrete canonical
+resolver. It establishes, in order:
 
 1. Better Auth validates the live session and yields its immutable
    `AuthUserId`.
@@ -65,10 +61,29 @@ The concrete resolver must establish, in order:
 4. Staff is active and has application-verified MFA assurance.
 5. Client is active; Agent 11 must not infer ownership from caller input.
 
-Only after those facts resolve may the existing private issuer register a
-capability. Enrollment, inactive/disabled, missing, duplicated, malformed, or
-throwing resolution fails before Payload. Agent 11 must not export a generic
-resolver-driven gateway factory, principal attester, or capability issuer.
+The resolver returns an explicit frozen `authorized`, `enrollment-only`, or
+`denied` result. Its narrow session projection carries only the independent
+freshness boolean needed by future sensitive operations; freshness is not
+added to the principal and is not required for ordinary authorized work. The
+result remains ordinary application data and has no runtime authority.
+
+Slice 1 has no approved Client credential provisioning or activation path. The
+resolver validates a Client binding and canonical status but returns `denied`
+even when that Client is active. Slice 2 must deliberately replace this policy
+when its provisioning boundary is approved; email matching can never do so.
+
+`portal-payload-gateway.ts` directly imports the concrete resolver and is the
+only module with lexical access to Agent 10's private issuer. It exports the
+fixed `portalPayloadGateway` and accepts no resolver, predicate, Payload
+instance, or other dependency argument. Enrollment, inactive/disabled,
+missing, duplicated, malformed, or throwing resolution fails before Payload.
+No generic resolver-driven gateway factory, principal attester, or capability
+issuer is exported.
+
+The production Better Auth route also uses Agent 11's separate canonical
+active-Staff subject predicate for the already-reviewed Agent 9 MFA enrollment
+boundary. That predicate resolves only `AuthUserId -> PortalIdentity -> Staff`
+and cannot infer Staff identity from email or browser properties.
 
 ## System capability and audit boundary
 
