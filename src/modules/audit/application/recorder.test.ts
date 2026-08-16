@@ -189,6 +189,7 @@ describe('source-bound security-event recorders', () => {
     const staffId = parseStaffId(41);
     if (!staffId) throw new Error('invalid system target fixture');
     harness.bindSystem(systemSource, {
+      correlationId: '018f47a8-7b2c-7f35-8c11-7bb91f934d22',
       operation: 'primary-owner-bootstrap',
       reasonCode: 'initial-primary-owner-provisioning',
       target: { id: staffId, type: 'staff' },
@@ -200,12 +201,33 @@ describe('source-bound security-event recorders', () => {
       }),
     ).resolves.toMatchObject({
       actor: { kind: 'system' },
+      correlationId: '018f47a8-7b2c-7f35-8c11-7bb91f934d22',
       metadata: {
         operation: 'primary-owner-bootstrap',
         reasonCode: 'initial-primary-owner-provisioning',
       },
       target: { id: 41, type: 'staff' },
     });
+  });
+
+  it('takes system correlation provenance only from the trusted source', async () => {
+    const harness = createHarness();
+    const systemSource = { opaqueSystemSource: 'private-capability' };
+    harness.bindSystem(systemSource, {
+      correlationId: '018f47a8-7b2c-7f35-8c11-7bb91f934d22',
+      operation: 'primary-owner-bootstrap',
+      reasonCode: 'initial-primary-owner-provisioning',
+    });
+
+    await expect(
+      harness.recorders.recordSystemSecurityEvent(systemSource, {
+        action: 'primary-owner.bootstrap.failed',
+        correlationId: '3ca85f64-5717-4562-b3fc-2c963f66afa6',
+      } as never),
+    ).rejects.toEqual(
+      new SecurityEventProvenanceError('trusted-system-source-required'),
+    );
+    expect(harness.append).not.toHaveBeenCalled();
   });
 
   it('denies a lookalike system capability and generic unknown objects', async () => {
