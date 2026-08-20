@@ -2,7 +2,11 @@
 
 import 'server-only';
 
-import type { RequestContext } from 'payload';
+import { randomUUID } from 'node:crypto';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import type { Payload, PayloadRequest, RequestContext } from 'payload';
 
 import {
   createSecurityEventRecorders,
@@ -12,8 +16,11 @@ import {
   type TrustedSystemSourceResolver,
 } from '@/modules/audit/application/recorder';
 import type { SystemEventReasonCode } from '@/modules/audit/domain/event';
+import { createPayloadSecurityEventRecorders } from '@/modules/audit/infrastructure/security-events-collection';
+import type { BootstrapCredential } from '@/modules/auth/bootstrap';
 import type { SystemOperation } from '@/modules/authorization/domain/system-operation';
 import {
+  parseAuthUserId,
   parseStaffId,
   type StaffId,
 } from '@/modules/portal-identity/domain/identifiers';
@@ -22,6 +29,20 @@ import type {
   AuthorizePrimaryOwnerBootstrap,
   PrimaryOwnerBootstrapAuthorizationArgs,
 } from '@/modules/staff/domain/invariants';
+import {
+  createPrimaryOwnerBootstrapPayloadRequest,
+  loadPrimaryOwnerBootstrapPayload,
+  preparePrimaryOwnerPersistence,
+  primaryOwnerAlreadyExists,
+  provisionPrimaryOwnerBootstrapCredential,
+  withPrimaryOwnerBootstrapSerialization,
+  type PendingPrimaryOwnerPersistence,
+} from '@/modules/staff/application/primary-owner-bootstrap-runtime';
+import {
+  PrimaryOwnerBootstrapError,
+  type PrimaryOwnerBootstrapInput,
+} from '@/modules/staff/application/primary-owner-bootstrap';
+import { runPrimaryOwnerBootstrapCommand } from '@/modules/staff/application/primary-owner-bootstrap-command';
 
 const systemCapabilityContextKey = 'portalSystemCapability';
 const PRIMARY_OWNER_BOOTSTRAP = 'primary-owner-bootstrap' as const;
@@ -73,10 +94,19 @@ type TrustedPrimaryOwnerBootstrapSourceResolver<Source extends object> =
         >;
   }>;
 
+type PrimaryOwnerTargetBinding = Readonly<{
+  commit(): Promise<void>;
+  rollback(): Promise<void>;
+  staffId: StaffId;
+}>;
+
 type TrustedPrimaryOwnerTargetResolver<TargetSource extends object> = Readonly<{
-  resolveCreatedPrimaryOwnerStaffId(
+  resolveCreatedPrimaryOwnerTarget(
     source: TargetSource,
-  ): StaffId | undefined | Promise<StaffId | undefined>;
+  ):
+    | PrimaryOwnerTargetBinding
+    | undefined
+    | Promise<PrimaryOwnerTargetBinding | undefined>;
 }>;
 
 declare const primaryOwnerAuditSourceBrand: unique symbol;
@@ -211,18 +241,27 @@ function createAuditSource(
 async function resolvePrimaryOwnerTarget<TargetSource extends object>(
   resolver: TrustedPrimaryOwnerTargetResolver<TargetSource>,
   targetSource: unknown,
-): Promise<StaffId> {
+): Promise<PrimaryOwnerTargetBinding> {
   if (typeof targetSource !== 'object' || targetSource === null) {
     throw new SystemPayloadGatewayAuthorizationError('system-target-required');
   }
 
   try {
-    const staffId = parseStaffId(
-      await resolver.resolveCreatedPrimaryOwnerStaffId(
-        targetSource as TargetSource,
-      ),
+    const target = await resolver.resolveCreatedPrimaryOwnerTarget(
+      targetSource as TargetSource,
     );
-    if (staffId) return staffId;
+    const staffId = parseStaffId(target?.staffId);
+    if (
+      staffId &&
+      typeof target?.commit === 'function' &&
+      typeof target.rollback === 'function'
+    ) {
+      return Object.freeze({
+        commit: target.commit,
+        rollback: target.rollback,
+        staffId,
+      });
+    }
   } catch {
     // Resolver failures are intentionally indistinguishable from bad sources.
   }
@@ -240,7 +279,10 @@ function composePrimaryOwnerBootstrapSystemGateway<
   SystemSource extends object,
   TargetSource extends object,
 >(dependencies: {
-  createAuditRecorder(
+  createFailureAuditRecorder(
+    resolver: TrustedSystemSourceResolver<PrimaryOwnerBootstrapAuditSource>,
+  ): SystemSecurityEventRecorder<PrimaryOwnerBootstrapAuditSource>;
+  createSuccessAuditRecorder(
     resolver: TrustedSystemSourceResolver<PrimaryOwnerBootstrapAuditSource>,
   ): SystemSecurityEventRecorder<PrimaryOwnerBootstrapAuditSource>;
   sourceResolver: TrustedPrimaryOwnerBootstrapSourceResolver<SystemSource>;
@@ -251,7 +293,10 @@ function composePrimaryOwnerBootstrapSystemGateway<
       resolveSystemSource: (source: PrimaryOwnerBootstrapAuditSource) =>
         systemAuditSources.get(source),
     });
-  const auditRecorder = dependencies.createAuditRecorder(auditSourceResolver);
+  const failureAuditRecorder =
+    dependencies.createFailureAuditRecorder(auditSourceResolver);
+  const successAuditRecorder =
+    dependencies.createSuccessAuditRecorder(auditSourceResolver);
 
   const gateway: SystemPayloadGateway<SystemSource, TargetSource> =
     Object.freeze({
@@ -313,6 +358,7 @@ function composePrimaryOwnerBootstrapSystemGateway<
         try {
           let outcome: PrimaryOwnerBootstrapOutcome<Result, TargetSource>;
           let successAuditSource: PrimaryOwnerBootstrapAuditSource;
+          let target: PrimaryOwnerTargetBinding | undefined;
 
           try {
             outcome = await operation(scope);
@@ -326,7 +372,7 @@ function composePrimaryOwnerBootstrapSystemGateway<
               );
             }
 
-            const staffId = await resolvePrimaryOwnerTarget(
+            target = await resolvePrimaryOwnerTarget(
               dependencies.targetResolver,
               outcome.targetSource,
             );
@@ -334,24 +380,37 @@ function composePrimaryOwnerBootstrapSystemGateway<
               correlationId: binding.correlationId,
               operation: binding.operation,
               reasonCode: binding.reasonCode,
-              target: { id: staffId, type: 'staff' },
+              target: { id: target.staffId, type: 'staff' },
             });
             invocationAuditSources.add(successAuditSource);
           } catch (operationFailure) {
-            await auditRecorder.recordSystemSecurityEvent(failureAuditSource, {
-              action: 'primary-owner.bootstrap.failed',
-            });
+            if (target) await target.rollback();
+            await failureAuditRecorder.recordSystemSecurityEvent(
+              failureAuditSource,
+              {
+                action: 'primary-owner.bootstrap.failed',
+              },
+            );
             throw operationFailure;
           }
 
-          // A successful return is impossible until this append succeeds.
-          // If it fails, no second terminal event is attempted: Agent 12/14
-          // must later supply the database transaction that rolls back the
-          // privileged change and append atomically.
-          await auditRecorder.recordSystemSecurityEvent(successAuditSource, {
-            action: 'primary-owner.bootstrap.succeeded',
-          });
-          return outcome.result;
+          try {
+            // The success append uses the same Payload request/transaction as
+            // Staff and PortalIdentity. A successful return is impossible
+            // until both the append and transaction commit succeed.
+            await successAuditRecorder.recordSystemSecurityEvent(
+              successAuditSource,
+              { action: 'primary-owner.bootstrap.succeeded' },
+            );
+            await target.commit();
+            return outcome.result;
+          } catch (terminalFailure) {
+            await target.rollback();
+            // Do not attempt a second terminal event after an audit/commit
+            // failure; the uncommitted success event is rolled back with the
+            // privileged application writes.
+            throw terminalFailure;
+          }
         } finally {
           systemCapabilities.delete(capability);
           for (const source of invocationAuditSources) {
@@ -367,9 +426,303 @@ function composePrimaryOwnerBootstrapSystemGateway<
   });
 }
 
+type ConcreteBootstrapSystemSource = Readonly<{
+  readonly bootstrapInvocation: 'private';
+}>;
+
+type ConcreteBootstrapTargetSource = Readonly<{
+  readonly createdPrimaryOwner: 'private';
+}>;
+
+const concreteBootstrapSystemSources = new WeakSet<object>();
+const concreteBootstrapTargets = new WeakMap<
+  object,
+  PrimaryOwnerTargetBinding
+>();
+
+function trustConcreteBootstrapSystemSource(): ConcreteBootstrapSystemSource {
+  const source = Object.freeze({
+    bootstrapInvocation: 'private' as const,
+  });
+  concreteBootstrapSystemSources.add(source);
+  return source;
+}
+
+function trustConcreteBootstrapTarget(
+  pending: PendingPrimaryOwnerPersistence,
+): ConcreteBootstrapTargetSource {
+  const source = Object.freeze({ createdPrimaryOwner: 'private' as const });
+  concreteBootstrapTargets.set(
+    source,
+    Object.freeze({
+      commit: pending.commit,
+      rollback: pending.rollback,
+      staffId: pending.staffId,
+    }),
+  );
+  return source;
+}
+
+function createConcreteBootstrapComposition(
+  payload: Payload,
+  auditRequest: PayloadRequest,
+) {
+  return composePrimaryOwnerBootstrapSystemGateway<
+    ConcreteBootstrapSystemSource,
+    ConcreteBootstrapTargetSource
+  >({
+    createFailureAuditRecorder: (systemResolver) =>
+      createPayloadSecurityEventRecorders(payload, {
+        principalResolver: { resolvePrincipal: () => undefined },
+        systemResolver,
+        targetResolver: { resolveTarget: () => undefined },
+      }),
+    createSuccessAuditRecorder: (systemResolver) =>
+      createPayloadSecurityEventRecorders(
+        payload,
+        {
+          principalResolver: { resolvePrincipal: () => undefined },
+          systemResolver,
+          targetResolver: { resolveTarget: () => undefined },
+        },
+        undefined,
+        auditRequest,
+      ),
+    sourceResolver: {
+      resolveSystemOperation: (source) =>
+        concreteBootstrapSystemSources.has(source)
+          ? PRIMARY_OWNER_BOOTSTRAP
+          : undefined,
+    },
+    targetResolver: {
+      resolveCreatedPrimaryOwnerTarget: (source) =>
+        concreteBootstrapTargets.get(source),
+    },
+  });
+}
+
+async function throwThroughMandatoryFailureAudit(
+  composition: PrimaryOwnerBootstrapSystemComposition<
+    ConcreteBootstrapSystemSource,
+    ConcreteBootstrapTargetSource
+  >,
+  source: ConcreteBootstrapSystemSource,
+  request: PrimaryOwnerBootstrapRequest,
+  failure: unknown,
+): Promise<never> {
+  return composition.gateway.runPrimaryOwnerBootstrap(
+    source,
+    request,
+    async () => {
+      throw failure;
+    },
+  );
+}
+
+function safeBootstrapFailure(error: unknown): PrimaryOwnerBootstrapError {
+  return error instanceof PrimaryOwnerBootstrapError
+    ? error
+    : new PrimaryOwnerBootstrapError('BOOTSTRAP_FAILED');
+}
+
+type ConcreteBootstrapPayload = Awaited<
+  ReturnType<typeof loadPrimaryOwnerBootstrapPayload>
+>;
+
+type ConcreteBootstrapDependencies = Readonly<{
+  createAuditRequest(
+    payload: ConcreteBootstrapPayload,
+  ): Promise<PayloadRequest>;
+  loadPayload(): Promise<ConcreteBootstrapPayload>;
+  ownerExists(payload: ConcreteBootstrapPayload): Promise<boolean>;
+  prepare(
+    payload: ConcreteBootstrapPayload,
+    auditRequest: PayloadRequest,
+    context: RequestContext,
+    input: PrimaryOwnerBootstrapInput,
+    credential: BootstrapCredential,
+  ): Promise<PendingPrimaryOwnerPersistence>;
+  provision<T>(
+    input: PrimaryOwnerBootstrapInput,
+    finalize: (credential: BootstrapCredential) => Promise<T>,
+  ): Promise<T>;
+  serialize<T>(
+    payload: ConcreteBootstrapPayload,
+    operation: () => Promise<T>,
+  ): Promise<T>;
+}>;
+
+const concreteBootstrapDependencies: ConcreteBootstrapDependencies =
+  Object.freeze({
+    createAuditRequest: createPrimaryOwnerBootstrapPayloadRequest,
+    loadPayload: loadPrimaryOwnerBootstrapPayload,
+    ownerExists: primaryOwnerAlreadyExists,
+    prepare: preparePrimaryOwnerPersistence,
+    provision: provisionPrimaryOwnerBootstrapCredential,
+    serialize: withPrimaryOwnerBootstrapSerialization,
+  });
+
+/**
+ * Private testable orchestration. Dependency substitution remains lexical to
+ * this module; production callers cannot inject a resolver, issuer, recorder,
+ * lock, Payload instance, or credential mechanism.
+ */
+async function runPrimaryOwnerBootstrapWithDependencies(
+  input: PrimaryOwnerBootstrapInput,
+  dependencies: ConcreteBootstrapDependencies,
+): Promise<void> {
+  let payload: ConcreteBootstrapPayload;
+  try {
+    payload = await dependencies.loadPayload();
+  } catch (error) {
+    throw safeBootstrapFailure(error);
+  }
+
+  let auditRequest: PayloadRequest;
+  try {
+    auditRequest = await dependencies.createAuditRequest(payload);
+  } catch (error) {
+    try {
+      await payload.destroy();
+    } catch {
+      // The operation never issued authority or changed state.
+    }
+    throw safeBootstrapFailure(error);
+  }
+
+  const composition = createConcreteBootstrapComposition(payload, auditRequest);
+  const source = trustConcreteBootstrapSystemSource();
+  const request: PrimaryOwnerBootstrapRequest = Object.freeze({
+    correlationId: randomUUID(),
+    operation: PRIMARY_OWNER_BOOTSTRAP,
+    reasonCode: PRIMARY_OWNER_BOOTSTRAP_REASON,
+  });
+  let mandatoryEnvelopeOwnsTerminalAudit = false;
+  let bootstrapCommitted = false;
+  let targetSource: ConcreteBootstrapTargetSource | undefined;
+
+  try {
+    await dependencies.serialize(payload, async () => {
+      let alreadyCompleted = false;
+      try {
+        alreadyCompleted = await dependencies.ownerExists(payload);
+      } catch (error) {
+        mandatoryEnvelopeOwnsTerminalAudit = true;
+        await throwThroughMandatoryFailureAudit(
+          composition,
+          source,
+          request,
+          error,
+        );
+      }
+
+      if (alreadyCompleted) {
+        mandatoryEnvelopeOwnsTerminalAudit = true;
+        await throwThroughMandatoryFailureAudit(
+          composition,
+          source,
+          request,
+          new PrimaryOwnerBootstrapError('ALREADY_COMPLETED'),
+        );
+      }
+
+      try {
+        await dependencies.provision(input, async (credential) => {
+          mandatoryEnvelopeOwnsTerminalAudit = true;
+          return composition.gateway.runPrimaryOwnerBootstrap(
+            source,
+            request,
+            async (scope) => {
+              const pending = await dependencies.prepare(
+                payload,
+                auditRequest,
+                scope.context,
+                input,
+                credential,
+              );
+              targetSource = trustConcreteBootstrapTarget(pending);
+              return Object.freeze({ result: undefined, targetSource });
+            },
+          );
+        });
+        bootstrapCommitted = true;
+      } catch (error) {
+        if (!mandatoryEnvelopeOwnsTerminalAudit) {
+          mandatoryEnvelopeOwnsTerminalAudit = true;
+          await throwThroughMandatoryFailureAudit(
+            composition,
+            source,
+            request,
+            error,
+          );
+        }
+        throw error;
+      }
+    });
+  } catch (error) {
+    if (bootstrapCommitted) return;
+    if (!mandatoryEnvelopeOwnsTerminalAudit) {
+      mandatoryEnvelopeOwnsTerminalAudit = true;
+      try {
+        await throwThroughMandatoryFailureAudit(
+          composition,
+          source,
+          request,
+          error,
+        );
+      } catch (auditedFailure) {
+        throw safeBootstrapFailure(auditedFailure);
+      }
+    }
+    throw safeBootstrapFailure(error);
+  } finally {
+    concreteBootstrapSystemSources.delete(source);
+    if (targetSource) concreteBootstrapTargets.delete(targetSource);
+    try {
+      await payload.destroy();
+    } catch {
+      // Terminal state is already audited and settled. Cleanup failure must
+      // not turn a committed bootstrap into an ambiguous retry instruction.
+    }
+  }
+}
+
+/**
+ * The sole concrete operation. It is intentionally not exported; only direct
+ * execution of this module can pass it to the non-web command adapter.
+ */
+async function runConcretePrimaryOwnerBootstrap(
+  input: PrimaryOwnerBootstrapInput,
+): Promise<void> {
+  return runPrimaryOwnerBootstrapWithDependencies(
+    input,
+    concreteBootstrapDependencies,
+  );
+}
+
+function isDirectCommandExecution(): boolean {
+  const entrypoint = process.argv[1];
+  return (
+    typeof entrypoint === 'string' &&
+    resolve(entrypoint) === fileURLToPath(import.meta.url)
+  );
+}
+
+if (isDirectCommandExecution()) {
+  void runPrimaryOwnerBootstrapCommand({
+    environment: process.env,
+    execute: runConcretePrimaryOwnerBootstrap,
+    stderr: process.stderr,
+    stdout: process.stdout,
+  }).then((exitCode) => {
+    process.exit(exitCode);
+  });
+}
+
 /**
  * Verifies only the private request capability. It cannot mint one and normal
- * callers can obtain only `false` until Agent 12 completes this module.
+ * callers can obtain only `false` because issuance is lexical to the direct
+ * non-web command above.
  */
 export function authorizePrimaryOwnerBootstrapRequest(
   args: PrimaryOwnerBootstrapAuthorizationArgs,
@@ -404,13 +757,23 @@ if (import.meta.vitest) {
     }),
   ) {
     const systemSources = new WeakSet<object>();
-    const targetSources = new WeakMap<object, StaffId>();
+    const targetSources = new WeakMap<object, PrimaryOwnerTargetBinding>();
     const append = vi.fn(appendImplementation);
+    const commit = vi.fn(async () => undefined);
+    const rollback = vi.fn(async () => undefined);
     const composition = composePrimaryOwnerBootstrapSystemGateway<
       TestSystemSource,
       TestTargetSource
     >({
-      createAuditRecorder: (systemResolver) =>
+      createFailureAuditRecorder: (systemResolver) =>
+        createSecurityEventRecorders({
+          appendPort: { append },
+          now: () => new Date('2026-08-15T18:00:00.000Z'),
+          principalResolver: { resolvePrincipal: () => undefined },
+          systemResolver,
+          targetResolver: { resolveTarget: () => undefined },
+        }),
+      createSuccessAuditRecorder: (systemResolver) =>
         createSecurityEventRecorders({
           appendPort: { append },
           now: () => new Date('2026-08-15T18:00:00.000Z'),
@@ -423,14 +786,15 @@ if (import.meta.vitest) {
           systemSources.has(source) ? PRIMARY_OWNER_BOOTSTRAP : undefined,
       },
       targetResolver: {
-        resolveCreatedPrimaryOwnerStaffId: (source) =>
-          targetSources.get(source),
+        resolveCreatedPrimaryOwnerTarget: (source) => targetSources.get(source),
       },
     });
 
     return {
       append,
+      commit,
       composition,
+      rollback,
       trustSystemSource(): TestSystemSource {
         const source = Object.freeze({
           opaqueSystemSource: crypto.randomUUID(),
@@ -444,7 +808,7 @@ if (import.meta.vitest) {
         const source = Object.freeze({
           opaqueTargetSource: crypto.randomUUID(),
         });
-        targetSources.set(source, staffId);
+        targetSources.set(source, { commit, rollback, staffId });
         return source;
       },
     };
@@ -498,6 +862,8 @@ if (import.meta.vitest) {
 
       expect(privilegedAction).toHaveBeenCalledOnce();
       expect(harness.append).toHaveBeenCalledOnce();
+      expect(harness.commit).toHaveBeenCalledOnce();
+      expect(harness.rollback).not.toHaveBeenCalled();
       expect(harness.append).toHaveBeenCalledWith({
         action: 'primary-owner.bootstrap.succeeded',
         actorKind: 'system',
@@ -583,6 +949,8 @@ if (import.meta.vitest) {
       ).rejects.toMatchObject({ name: 'SecurityEventPersistenceError' });
       expect(privilegedAction).toHaveBeenCalledOnce();
       expect(harness.append).toHaveBeenCalledOnce();
+      expect(harness.commit).not.toHaveBeenCalled();
+      expect(harness.rollback).toHaveBeenCalledOnce();
       expect(harness.append.mock.calls[0]?.[0]).toMatchObject({
         action: 'primary-owner.bootstrap.succeeded',
         correlationId: testCorrelationId,
@@ -628,7 +996,7 @@ if (import.meta.vitest) {
       });
     });
 
-    it('denies Owner and lookalike sources before action or authoritative audit', async () => {
+    it('denies Owner, Administrator, and lookalike sources before action or authoritative audit', async () => {
       const harness = createPrivateSystemHarness();
       const privilegedAction = vi.fn(async () => ({
         result: undefined,
@@ -642,6 +1010,14 @@ if (import.meta.vitest) {
           mfaAssurance: 'verified',
           role: 'owner',
           staffId: 11,
+          status: 'active',
+        },
+        {
+          authUserId: 'auth-administrator',
+          kind: 'staff',
+          mfaAssurance: 'verified',
+          role: 'administrator',
+          staffId: 12,
           status: 'active',
         },
         { opaqueSystemSource: 'lookalike' },
@@ -728,6 +1104,240 @@ if (import.meta.vitest) {
           systemOperation: PRIMARY_OWNER_BOOTSTRAP,
         } as never),
       ).toBe(false);
+    });
+  });
+
+  const concreteTestInput: PrimaryOwnerBootstrapInput = Object.freeze({
+    firstName: 'Grace',
+    lastName: 'Hopper',
+    loginEmail: 'login.owner@example.com',
+    password: 'test-only-primary-owner-password',
+    workEmail: 'work.owner@example.com',
+  });
+
+  function createConcreteOperationHarness(
+    options: Readonly<{
+      auditFailure?: boolean;
+      ownerExists?: boolean;
+      prepareFailure?: 'portal-identity' | 'staff';
+      provisionFailure?: boolean;
+      serializationFailure?: boolean;
+    }> = {},
+  ) {
+    const auditAttempts: unknown[] = [];
+    const auditCreateRequests: Array<Record<string, unknown>> = [];
+    const persistedEvents: unknown[] = [];
+    const create = vi.fn(async (request: Record<string, unknown>) => {
+      auditCreateRequests.push(request);
+      auditAttempts.push(request.data);
+      if (options.auditFailure) return { id: 'invalid-event-id' };
+      persistedEvents.push(request.data);
+      return { id: persistedEvents.length };
+    });
+    const payload = { create } as unknown as ConcreteBootstrapPayload;
+    const commit = vi.fn(async () => undefined);
+    const rollback = vi.fn(async () => undefined);
+    const prepare = vi.fn(async (): Promise<PendingPrimaryOwnerPersistence> => {
+      if (options.prepareFailure) {
+        throw new Error(
+          `${options.prepareFailure} rejected ${concreteTestInput.password}`,
+        );
+      }
+      const staffId = parseStaffId(91);
+      if (!staffId) throw new Error('Invalid test Staff ID');
+      return {
+        auditRequest: {} as PayloadRequest,
+        commit,
+        rollback,
+        staffId,
+      };
+    });
+    let credentialCreated = 0;
+    let credentialCompensated = 0;
+    const provision: ConcreteBootstrapDependencies['provision'] = async (
+      input,
+      finalize,
+    ) => {
+      if (options.provisionFailure) {
+        throw new Error(`credential rejected ${input.password}`);
+      }
+      credentialCreated += 1;
+      const authUserId = parseAuthUserId('auth-primary-owner');
+      if (!authUserId) throw new Error('Invalid test AuthUserId');
+      try {
+        return await finalize(Object.freeze({ authUserId }));
+      } catch (error) {
+        credentialCompensated += 1;
+        throw error;
+      }
+    };
+    const dependencies: ConcreteBootstrapDependencies = Object.freeze({
+      createAuditRequest: async () => ({}) as PayloadRequest,
+      loadPayload: async () => payload,
+      ownerExists: async () => options.ownerExists ?? false,
+      prepare,
+      provision,
+      serialize: async (_payload, operation) => {
+        if (options.serializationFailure) {
+          throw new Error('database lock unavailable');
+        }
+        return operation();
+      },
+    });
+
+    return {
+      auditAttempts,
+      auditCreateRequests,
+      commit,
+      dependencies,
+      get credentialCompensated() {
+        return credentialCompensated;
+      },
+      get credentialCreated() {
+        return credentialCreated;
+      },
+      persistedEvents,
+      prepare,
+      rollback,
+    };
+  }
+
+  describe('concrete primary-owner bootstrap orchestration', () => {
+    it('creates one credential and commits only after one success audit', async () => {
+      const harness = createConcreteOperationHarness();
+
+      await expect(
+        runPrimaryOwnerBootstrapWithDependencies(
+          concreteTestInput,
+          harness.dependencies,
+        ),
+      ).resolves.toBeUndefined();
+
+      expect(harness.credentialCreated).toBe(1);
+      expect(harness.credentialCompensated).toBe(0);
+      expect(harness.prepare).toHaveBeenCalledOnce();
+      expect(harness.commit).toHaveBeenCalledOnce();
+      expect(harness.rollback).not.toHaveBeenCalled();
+      expect(harness.persistedEvents).toHaveLength(1);
+      expect(harness.auditCreateRequests[0]).toHaveProperty('req');
+      expect(harness.persistedEvents[0]).toMatchObject({
+        action: 'primary-owner.bootstrap.succeeded',
+        actorKind: 'system',
+        metadata: {
+          operation: PRIMARY_OWNER_BOOTSTRAP,
+          reasonCode: PRIMARY_OWNER_BOOTSTRAP_REASON,
+        },
+        targetId: '91',
+        targetType: 'staff',
+      });
+    });
+
+    it('denies a completed bootstrap before credential creation and records one failure', async () => {
+      const harness = createConcreteOperationHarness({ ownerExists: true });
+
+      await expect(
+        runPrimaryOwnerBootstrapWithDependencies(
+          concreteTestInput,
+          harness.dependencies,
+        ),
+      ).rejects.toMatchObject({ code: 'ALREADY_COMPLETED' });
+
+      expect(harness.credentialCreated).toBe(0);
+      expect(harness.prepare).not.toHaveBeenCalled();
+      expect(harness.persistedEvents).toHaveLength(1);
+      expect(harness.auditCreateRequests[0]).not.toHaveProperty('req');
+      expect(harness.persistedEvents[0]).toMatchObject({
+        action: 'primary-owner.bootstrap.failed',
+        actorKind: 'system',
+      });
+    });
+
+    it('records credential-creation failure without creating application state', async () => {
+      const harness = createConcreteOperationHarness({
+        provisionFailure: true,
+      });
+
+      await expect(
+        runPrimaryOwnerBootstrapWithDependencies(
+          concreteTestInput,
+          harness.dependencies,
+        ),
+      ).rejects.toMatchObject({ code: 'BOOTSTRAP_FAILED' });
+
+      expect(harness.credentialCreated).toBe(0);
+      expect(harness.prepare).not.toHaveBeenCalled();
+      expect(harness.persistedEvents).toHaveLength(1);
+      expect(harness.persistedEvents[0]).toMatchObject({
+        action: 'primary-owner.bootstrap.failed',
+      });
+      expect(JSON.stringify(harness.auditAttempts)).not.toContain(
+        concreteTestInput.password,
+      );
+    });
+
+    it('records one failure when database serialization cannot start', async () => {
+      const harness = createConcreteOperationHarness({
+        serializationFailure: true,
+      });
+
+      await expect(
+        runPrimaryOwnerBootstrapWithDependencies(
+          concreteTestInput,
+          harness.dependencies,
+        ),
+      ).rejects.toMatchObject({ code: 'BOOTSTRAP_FAILED' });
+
+      expect(harness.credentialCreated).toBe(0);
+      expect(harness.prepare).not.toHaveBeenCalled();
+      expect(harness.persistedEvents).toHaveLength(1);
+      expect(harness.persistedEvents[0]).toMatchObject({
+        action: 'primary-owner.bootstrap.failed',
+      });
+    });
+
+    it.each(['staff', 'portal-identity'] as const)(
+      'compensates the credential and records failure when %s persistence fails',
+      async (prepareFailure) => {
+        const harness = createConcreteOperationHarness({ prepareFailure });
+
+        await expect(
+          runPrimaryOwnerBootstrapWithDependencies(
+            concreteTestInput,
+            harness.dependencies,
+          ),
+        ).rejects.toMatchObject({ code: 'BOOTSTRAP_FAILED' });
+
+        expect(harness.credentialCreated).toBe(1);
+        expect(harness.credentialCompensated).toBe(1);
+        expect(harness.commit).not.toHaveBeenCalled();
+        expect(harness.persistedEvents).toHaveLength(1);
+        expect(harness.persistedEvents[0]).toMatchObject({
+          action: 'primary-owner.bootstrap.failed',
+        });
+        expect(JSON.stringify(harness.auditAttempts)).not.toContain(
+          concreteTestInput.password,
+        );
+      },
+    );
+
+    it('rolls back and compensates when the mandatory success audit fails', async () => {
+      const harness = createConcreteOperationHarness({ auditFailure: true });
+
+      await expect(
+        runPrimaryOwnerBootstrapWithDependencies(
+          concreteTestInput,
+          harness.dependencies,
+        ),
+      ).rejects.toMatchObject({ code: 'BOOTSTRAP_FAILED' });
+
+      expect(harness.commit).not.toHaveBeenCalled();
+      expect(harness.rollback).toHaveBeenCalledOnce();
+      expect(harness.credentialCompensated).toBe(1);
+      expect(harness.auditAttempts).toHaveLength(1);
+      expect(harness.persistedEvents).toHaveLength(0);
+      expect(JSON.stringify(harness.auditAttempts)).not.toContain(
+        concreteTestInput.password,
+      );
     });
   });
 }

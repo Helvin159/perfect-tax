@@ -2,9 +2,11 @@
 
 This directory is Agent 10's server-only authorization choke point. It contains
 the capability registries, issuers, verifiers, fixed Payload ports, Agent 8
-policy integration, and the audited system-operation envelope. Agent 11 has
-completed the portal composition in this same module. System issuance remains
-fail closed until Agent 12 completes its separate concrete composition.
+policy integration, and the audited system-operation envelope. Agent 11
+completed the portal composition in this same module. Agent 12 completed the
+separate concrete primary-owner composition, which remains deployment-readiness
+blocked until Agents 13 and 14 register and physically prove its persistence
+boundary.
 
 ## Portal capability boundary
 
@@ -100,16 +102,20 @@ the request capability. The privileged callback receives only the fixed
 operation/reason and request context. It never receives an audit source,
 recorder, capability object, or correlation control.
 
-The envelope owns terminal auditing:
+The envelope owns terminal auditing and transaction settlement:
 
 - A successful action must return a target source recognized by the private
-  target resolver. The envelope appends exactly one
-  `primary-owner.bootstrap.succeeded` event before returning the result.
+  target resolver. That source privately carries the canonical Staff target and
+  transaction settlement. The envelope appends exactly one
+  `primary-owner.bootstrap.succeeded` event in the same transaction, commits,
+  and only then returns the result.
 - A thrown action or invalid target appends exactly one
-  `primary-owner.bootstrap.failed` event before propagating the failure.
+  `primary-owner.bootstrap.failed` event after privileged application state is
+  rolled back and before propagating the failure.
 - If the required append fails, the invocation fails closed. A failed success
-  append does not trigger a second terminal-event attempt, avoiding an
-  accidental success/failure pair.
+  append rolls back Staff, PortalIdentity, and the uncommitted event together.
+  It does not trigger a second terminal-event attempt, avoiding an accidental
+  success/failure pair.
 
 The validated correlation ID is stored only in trusted system provenance.
 Agent 7's system recorder request accepts only the action and copies correlation
@@ -118,10 +124,10 @@ operation, reason, and success target are also server derived. Capability,
 principal, credential/session/MFA material, full request bodies, and private
 Client data never enter the event request.
 
-This contract prevents a successful return without the audit append. It does
-not yet claim database atomicity: Agent 12/14 must put the privileged writes
-and SecurityEvent append in the same database transaction so append failure
-also rolls back the write.
+This contract prevents a successful return without the audit append and
+transaction commit. Agent 12 uses one Payload request/transaction for Staff,
+PortalIdentity, and the success event, but does not claim a real PostgreSQL
+proof before Agent 14/15 migration and integration work.
 
 Current system runtime exports are non-issuing:
 
@@ -135,21 +141,32 @@ Current system runtime exports are non-issuing:
 `PrimaryOwnerBootstrapRequest` and error-code exports are type-only where
 applicable and cannot mint authority.
 
-## Agent 12 handoff
+## Agent 12 closed composition
 
-Agent 12 may complete `system-payload-gateway.ts`. It must directly import its
-concrete private, non-web `primary-owner-bootstrap` invocation resolver and the
-canonical created-Staff target resolver into that module, then construct Agent
-7's real Payload-backed recorder against the module-private audit resolver.
-The existing issuer and composition function remain unexported. The final
-export may expose only the narrowed audited bootstrap operation and the request
-authorization verifier needed by the Staff collection composition.
+`system-payload-gateway.ts` now directly owns the concrete private non-web
+invocation source, canonical created-Staff target source, Agent 7 Payload-backed
+recorders, and direct command execution. Its fixed executor uses Agent 3's
+credential provisioner and Agent 12's narrow persistence runtime. The runner,
+dependency object, sources, registries, resolvers, recorder composition,
+settlement sources, and gateway remain unexported.
 
-Agent 12 owns Staff creation, Better Auth credentials, PortalIdentity creation,
-advisory locking, transaction integration, CLI behavior, and MFA enrollment.
-It must not create a parallel capability, resolver-injection factory, optional
-audit path, or role-to-system-capability conversion. The sole current system
-operation remains `primary-owner-bootstrap`.
+The package command directly executes this module under the `react-server`
+condition. It is the only place the private runner is handed to the command
+adapter. Imports from ordinary modules can reach only non-issuing verifiers and
+error/vocabulary exports; Owner and Administrator principals have no conversion
+path to a system source.
+
+The concrete operation holds a PostgreSQL session advisory lock from canonical
+preflight through terminal settlement. It rechecks Owner evidence inside the
+application transaction, creates fixed active primary Owner state, binds the
+Agent 3 `AuthUserId` explicitly through PortalIdentity, and leaves MFA state
+untouched. Agent 11 therefore yields enrollment-only authority until Agent 9
+TOTP verification succeeds.
+
+Current production execution rejects readiness before capability issuance or
+credential creation. See
+`src/modules/staff/application/PRIMARY_OWNER_BOOTSTRAP_HANDOFF.md` for exact
+Agent 13/14 activation requirements and proof limits.
 
 ## Test-only private composition
 
@@ -172,6 +189,6 @@ field contracts, explicitly deny unimplemented mutations, and preserve the
 same request object through security-sensitive hooks. CMS users remain outside
 this portal identity path.
 
-Agent 14 remains responsible for physical schema and transaction decisions.
-Agent 10 adds no table, field, index, constraint, grant, migration, generated
-Payload type, or PostgreSQL integration claim.
+Agent 14 remains responsible for physical schema and final transaction proof.
+Agent 10/12 add no table, field, index, constraint, grant, migration, generated
+Payload type, or schema-ownership decision.

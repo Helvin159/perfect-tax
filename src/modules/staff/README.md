@@ -14,8 +14,10 @@ updates an identity.
   is composed.
 - `createStaffCollection` accepts only an
   `authorizePrimaryOwnerBootstrap` predicate at server config-composition time.
-  Agent 12 must implement that predicate with its private, reason-bearing
-  `primary-owner-bootstrap` system capability. This module does not trust a
+  Agent 12 implements that predicate with Agent 10's private, reason-bearing
+  `primary-owner-bootstrap` system capability. Agent 13 must register the
+  factory result wired to `authorizePrimaryOwnerBootstrapRequest`; the default
+  `Staff` export intentionally remains fail closed. This module does not trust a
   request context flag, role, email, or caller-provided ID.
 - Agent 13 should register the composed collection without changing its fields
   or invariant hooks. Agent 12's bootstrap must create an active owner with
@@ -40,6 +42,7 @@ database defense in depth:
    disabling, or deletion of the primary-owner row. It may allow ordinary
    profile/contact edits. Owner transfer is deferred.
 
-The migration must not seed an owner. Agent 12 performs the one system-only,
-serialized bootstrap after migrations; its advisory-lock and audit behavior are
-outside this module.
+The migration must not seed an owner. Agent 12's command performs the one
+system-only serialized bootstrap after readiness is proven; its advisory lock,
+transaction, credential compensation, and mandatory audit behavior are outside
+this module. See `application/PRIMARY_OWNER_BOOTSTRAP_HANDOFF.md`.

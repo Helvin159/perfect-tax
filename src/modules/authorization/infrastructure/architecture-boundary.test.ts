@@ -83,12 +83,39 @@ describe('attested Payload gateway architecture boundary', () => {
     expect(systemSource).not.toMatch(
       /export\s+(?:const|function)\s+(?:systemCapabilities|systemAuditSources|createAuditSource)\b/u,
     );
+    expect(systemSource).not.toMatch(
+      /export\s+(?:async\s+)?function\s+(?:run|bootstrap|create|compose|issue|trust).*PrimaryOwner/iu,
+    );
     expect(systemSource).not.toMatch(/\bgetPayload\s*\(/u);
     expect(systemSource).not.toContain('overrideAccess: true');
     expect(systemSource).not.toContain('bypass-all');
     expect(systemSource).not.toContain('super-admin');
     expect(systemSource).not.toContain("'root'");
     expect(systemSource).toContain("'primary-owner-bootstrap'");
+    expect(systemSource).toContain('isDirectCommandExecution()');
+    expect(systemSource).toContain('runPrimaryOwnerBootstrapCommand({');
+  });
+
+  it('exposes primary-owner bootstrap only as the direct non-web package command', () => {
+    const packageJson = JSON.parse(
+      readFileSync(
+        new URL('../../../../package.json', import.meta.url),
+        'utf8',
+      ),
+    ) as { scripts?: Record<string, string> };
+    const command = packageJson.scripts?.['portal:bootstrap-primary-owner'];
+    const appRouteSources = [
+      '../../../app/api/auth/[...all]/route.ts',
+      '../../../app/api/health/live/route.ts',
+      '../../../app/api/health/ready/route.ts',
+      '../../../app/api/locale/route.ts',
+    ].map((path) => readFileSync(new URL(path, import.meta.url), 'utf8'));
+
+    expect(command).toContain('--conditions=react-server');
+    expect(command).toContain('system-payload-gateway.ts');
+    expect(appRouteSources.join('\n')).not.toMatch(
+      /primary-owner|bootstrap-primary-owner|system-payload-gateway/iu,
+    );
   });
 
   it('marks source inspection as defense in depth rather than the runtime control', () => {

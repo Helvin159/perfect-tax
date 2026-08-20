@@ -6,6 +6,7 @@ import type {
   CollectionBeforeValidateHook,
   CollectionConfig,
   Payload,
+  PayloadRequest,
 } from 'payload';
 
 import {
@@ -92,6 +93,7 @@ type PayloadSecurityEventCreate = (
     data: SecurityEventAppendRecord;
     depth: 0;
     overrideAccess: true;
+    req?: PayloadRequest;
   }>,
 ) => Promise<Readonly<{ id: unknown }>>;
 
@@ -111,6 +113,7 @@ export function createPayloadSecurityEventRecorders<
     targetResolver: TrustedTargetSourceResolver<TargetSource>;
   }>,
   now?: () => Date,
+  req?: PayloadRequest,
 ): SecurityEventRecorders<PrincipalSource, TargetSource, SystemSource> {
   const capability = Object.freeze({});
   appendCapabilities.add(capability);
@@ -127,6 +130,7 @@ export function createPayloadSecurityEventRecorders<
           data,
           depth: 0,
           overrideAccess: true,
+          ...(req === undefined ? {} : { req }),
         }),
     },
     ...(now === undefined ? {} : { now }),

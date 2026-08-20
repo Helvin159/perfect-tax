@@ -1,4 +1,4 @@
-import type { Payload } from 'payload';
+import type { Payload, PayloadRequest } from 'payload';
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
@@ -134,5 +134,44 @@ describe('SecurityEvents collection boundary', () => {
     expect(SecurityEvents.disableDuplicate).toBe(true);
     expect(SecurityEvents.graphQL).toBe(false);
     expect(SecurityEvents.timestamps).toBe(false);
+  });
+
+  it('can bind a recorder append to the caller-owned Payload transaction request', async () => {
+    const systemSource = Object.freeze({ source: 'trusted-system' });
+    const transactionRequest = {
+      transactionID: 'bootstrap-transaction',
+    } as PayloadRequest;
+    const create = vi.fn(async () => ({ id: 10 }));
+    const recorders = createPayloadSecurityEventRecorders(
+      { create } as unknown as Pick<Payload, 'create'>,
+      {
+        principalResolver: { resolvePrincipal: () => undefined },
+        systemResolver: {
+          resolveSystemSource: (source) =>
+            source === systemSource
+              ? {
+                  correlationId: '3ca85f64-5717-4562-b3fc-2c963f66afa6',
+                  operation: 'primary-owner-bootstrap' as const,
+                  reasonCode: 'initial-primary-owner-provisioning' as const,
+                }
+              : undefined,
+        },
+        targetResolver: { resolveTarget: () => undefined },
+      },
+      () => new Date('2026-08-10T15:00:00.000Z'),
+      transactionRequest,
+    );
+
+    await recorders.recordSystemSecurityEvent(systemSource, {
+      action: 'primary-owner.bootstrap.failed',
+    });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: 'security-events',
+        overrideAccess: true,
+        req: transactionRequest,
+      }),
+    );
   });
 });

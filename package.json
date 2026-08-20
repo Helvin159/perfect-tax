@@ -22,6 +22,7 @@
     "cms:generate:types": "payload generate:types",
     "cms:migrate": "payload migrate",
     "cms:migrate:create": "payload migrate:create",
+    "portal:bootstrap-primary-owner": "node --conditions=react-server --import tsx src/modules/authorization/infrastructure/system-payload-gateway.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
