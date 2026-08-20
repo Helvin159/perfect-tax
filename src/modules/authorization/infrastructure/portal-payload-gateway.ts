@@ -10,6 +10,7 @@ import type {
   RequestContext,
 } from 'payload';
 
+import { resolveCanonicalPortalPrincipalFromSession } from '@/modules/auth/portal-principal-composition';
 import {
   denyAuthorization,
   type AuthorizationDecision,
@@ -522,6 +523,55 @@ function composePortalPayloadGatewayWithPrincipalResolver<
     },
   });
 }
+
+async function getProductionPortalPayload(): Promise<Payload> {
+  const [{ getPayload }, { default: config }] = await Promise.all([
+    import('payload'),
+    import('@payload-config'),
+  ]);
+  return getPayload({ config });
+}
+
+/**
+ * Private concrete Payload port. It accepts calls only from the fixed gateway
+ * below; callers cannot inject a Payload instance or Local API arguments.
+ */
+const productionPortalPayload = Object.freeze({
+  async find(options: unknown) {
+    const payload = await getProductionPortalPayload();
+    const find = payload.find.bind(payload) as unknown as (
+      input: unknown,
+    ) => Promise<unknown>;
+    return find(options);
+  },
+  async findByID(options: unknown) {
+    const payload = await getProductionPortalPayload();
+    const findByID = payload.findByID.bind(payload) as unknown as (
+      input: unknown,
+    ) => Promise<unknown>;
+    return findByID(options);
+  },
+}) as unknown as Pick<Payload, 'find' | 'findByID'>;
+
+const concretePortalPrincipalResolver: TrustedPortalPrincipalResolver<Headers> =
+  Object.freeze({
+    async resolveCanonicalPrincipal(headers: Headers) {
+      const resolution =
+        await resolveCanonicalPortalPrincipalFromSession(headers);
+      return resolution.outcome === 'denied' ? undefined : resolution.principal;
+    },
+  });
+
+/**
+ * The sole production portal authority entrypoint. Every method re-resolves
+ * the live Better Auth session and canonical domain state, issues one private
+ * top-level capability, and revokes it in `finally`.
+ */
+export const portalPayloadGateway: PortalPayloadGateway<Headers> =
+  composePortalPayloadGatewayWithPrincipalResolver(
+    productionPortalPayload,
+    concretePortalPrincipalResolver,
+  );
 
 /** Convenience for hooks that must deny before performing side effects. */
 export function requireAttestedPortalRequest(
