@@ -15,6 +15,7 @@ This revision preserves the original separation of CMS, Staff, Client, ownership
 - Current CMS access and workflow code depends on req.user being a cms-users identity. Existing CMS users, roles, editorial history, authorship links, and bilingual workflow are preservation zones.
 - Payload Local API defaults to bypassing access. With overrideAccess: false it supports caller-supplied user and request context; the project must wrap those inputs so a caller cannot forge an operational principal.
 - Current bypasses are limited to public projections and CMS bootstrap. Better Auth is not yet a runtime dependency; ADR 0010 records a compatibility proof only.
+- The 2026-08-20 ownership decision places `staff`, `clients`, `portal-identities`, and `security-events` in the existing Payload-managed PostgreSQL schema and migration lifecycle. Better Auth remains separate in `portal_auth`; no third `portal_identity` schema is used for these collections.
 
 Repository evidence: payload.config.ts, src/modules/cms/users, src/modules/content/workflow, src/modules/content/infrastructure/public-payload-read-policy.ts, and docs/adr/0010-better-auth-compatibility-and-boundary.md.
 
@@ -317,11 +318,15 @@ Do not implement invitations, activation, email sending/templates, public activa
 
 ## L. Slice 1 Migration/Compatibility Strategy
 
-- Additive-only Payload tables and constraints: Staff, Clients, PortalIdentity, SecurityEvents, Client-number uniqueness, owner enforcement.
-- Better Auth core/MFA tables live in portal_auth with a separate role, reviewed SQL, migration directory, lock, and application ledger. Payload and Better Auth have no cross-schema DDL privilege.
+- Staff, Clients, PortalIdentity, and SecurityEvents are additive Payload tables in the adapter's existing/default `public` schema. They use `src/modules/cms/migrations` and the existing `payload_migrations` ledger; no separate `portal_identity` PostgreSQL schema or application migration ledger is created for them.
+- Agent 14 exclusively owns the additive Payload migration and generated Payload types after Agent 13 stabilizes registration. Payload schema push remains disabled.
+- Better Auth core/MFA tables live in `portal_auth` with a separate role, reviewed SQL, migration directory, lock, and application-owned auth ledger. Better Auth migration authority cannot alter Payload tables, and Payload migration authority must not alter `portal_auth`.
+- Production separates migration/deployment DDL authority from least-privilege runtime DML authority. Broader local development credentials do not weaken that target.
 - Run clean installation and populated Phase 1 upgrade tests. Populate the upgrade fixture with CMS identities, all roles, editorial relationships, bilingual content, globals, public media, and current migration history.
 - Do not seed an owner in a migration. Run primary-owner bootstrap post-deployment.
 - Recheck public EN/ES routes, CMS login/editorial flows, metadata, health/readiness, and existing email-adapter behavior.
+
+Deployment proceeds in this order: Agent 13 registration stabilization; Agent 14 Payload migration generation/review; Better Auth SQL/ledger finalization; backup/restore confirmation; Payload migration; Better Auth migration; grant and constraint verification; Payload type regeneration; application startup; readiness validation; then bootstrap eligibility after schema, transaction, and locking proof. Missing operational tables fail closed and are never created by runtime schema push.
 
 ## M. Slice 1 Final Integration/Security Review
 

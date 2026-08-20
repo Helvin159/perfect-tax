@@ -4,6 +4,7 @@
 - Decision date: 2026-07-18
 - Bridge gate date: 2026-08-09
 - Staff session policy date: 2026-08-10
+- Operational collection ownership decision date: 2026-08-20
 - Scope: Phase 1 Task 10 compatibility research plus Slice 1 authorization-bridge gate
 - Tested Better Auth version: `1.6.23`
 - Tested Payload version: `3.86.0`
@@ -325,15 +326,93 @@ Indexes were generated for `session.userId`, `account.userId`, and `verification
 
 The Admin plugin delta added `role`, `banned`, `banReason`, and `banExpires` to `user`, plus `impersonatedBy` to `session`. The two-factor plugin delta added `twoFactorEnabled` to `user` and a `twoFactor` table containing the TOTP secret, backup codes, verification state, failure count, and lock expiry. Plugin enablement therefore changes the auth schema and must be decided before the initial Phase 2 migration.
 
-### Ownership decision
+### Historical ownership decision (superseded in part on 2026-08-20)
 
 - Payload exclusively owns its current `public` schema and `src/modules/cms/migrations` through the Payload CLI and its `payload_migrations` ledger.
 - Better Auth exclusively owns core and plugin DDL in a dedicated `portal_auth` schema. It must connect with a dedicated database role whose default `search_path` begins with `portal_auth`; it must not share Payload's role or use Payload's Drizzle push/migration workflow.
 - Better Auth's CLI `generate` and `migrate` commands both worked with the built-in PostgreSQL/Kysely adapter. The spike observed no Better Auth migration-ledger table: `migrate` reconciled the live schema. For production, generate and review SQL against a production-like clone, commit it in a dedicated Phase 2 auth-migration directory, apply it through an independently locked release step, and record it in an application-owned auth migration ledger. Direct CLI `migrate` is acceptable only for disposable development databases.
-- Any invitation, staff/CMS link, or audit table is application identity data, not Better Auth core and not Payload content. Put it in a third `portal_identity` schema with separately reviewed application migrations. Better Auth and Payload generators must have no DDL privilege there.
-- Deployment runs Payload, Better Auth, and application-identity migrations as explicit independent jobs. Each job uses its own role, schema, ledger, backup/rollback plan, and failure boundary. No job silently runs at application request time.
+- The original spike proposed putting invitation, staff/CMS-link, and audit data in a third `portal_identity` schema with separate application migrations. The 2026-08-20 decision below supersedes that proposal for the Payload collections `staff`, `clients`, `portal-identities`, and `security-events` and for future application-domain persistence modeled as Payload collections.
+- The original spike proposed a third application-identity migration job. The 2026-08-20 decision below replaces that job for the four Slice 1 operational collections with the repository's normal reviewed Payload migration lifecycle.
 
 The spike proved that Better Auth respects PostgreSQL `search_path`: its four tables landed in `portal_auth`, while the `public` boundary marker remained untouched.
+
+### 2026-08-20 superseding operational collection ownership decision
+
+The accepted Slice 1 implementation makes `staff`, `clients`,
+`portal-identities`, and `security-events` first-class Payload collections.
+They therefore live in the existing Payload PostgreSQL schema used by this
+application, currently the adapter's default `public` schema. Do not create a
+separate `portal_identity` PostgreSQL schema for these four collections.
+
+Payload collection configuration, hooks, access control, Local API,
+relationships, generated types, and migrations form one application-domain
+persistence boundary. A separate physical schema for only these registered
+collections would require custom schema plumbing or a second persistence path
+without a corresponding security benefit. The controlling storage distinction
+is instead:
+
+```text
+authentication credentials, sessions, and MFA state
+  -> Better Auth in portal_auth
+
+application domain and authorization state
+  -> Payload in the existing Payload-managed schema
+```
+
+Physical co-location with CMS tables does not confer CMS authority. `cms-users`
+remains the only Payload Admin identity collection, with `editor`,
+`bilingual-reviewer`, `publisher`, and `cms-admin` roles. Operational roles
+remain `owner`, `administrator`, `case-worker`, and `intake`. Agent 13 must
+compose explicit fail-closed access for every operation on the four private
+collections. The only normal operational path remains Agent 11 canonical
+principal resolution, Agent 10 runtime attestation, Agent 8 policy, Payload
+access control with `overrideAccess: false`, collection hooks, and database
+constraints. Same PostgreSQL schema does not mean same application authority.
+
+The authoritative migration mechanism for the four collections is the Payload
+migration system in `src/modules/cms/migrations`, using the existing
+`payload_migrations` ledger. Agent 14 exclusively owns the Slice 1 additive
+migration generation and review and the generated Payload types after Agent 13
+stabilizes registration. Schema push remains disabled; no runtime process may
+create or reconcile missing tables automatically.
+
+Better Auth ownership is unchanged. Its core and MFA tables remain in
+`portal_auth`, use separately reviewed SQL and an independent application-owned
+auth migration ledger, and are applied by auth migration authority that cannot
+alter Payload tables. Payload migration authority must not alter
+`portal_auth`. Development credentials may be broader for local convenience,
+but production separates reviewed migration/deployment DDL authority from
+least-privilege runtime DML authority.
+
+The production runtime role is not the Payload table owner and does not receive
+unrestricted DDL. Agent 14 must implement and verify grants that provide only
+approved DML: PortalIdentity requires narrowly approved `SELECT` and `INSERT`
+with no ordinary `UPDATE`, `DELETE`, or `TRUNCATE`; SecurityEvents is
+append-only with `INSERT` and no read unless a separately reviewed operation
+requires it; Staff and Clients receive only the DML required by approved
+application services. Constraints, triggers, and grants must independently
+protect owner state, immutable bindings, append-only events, Client-number
+uniqueness, status vocabularies, and other server-owned invariants.
+
+Deployment order is:
+
+1. Agent 13 stabilizes registered Payload collection configuration.
+2. Agent 14 generates and reviews the additive Payload migration.
+3. Agent 14 finalizes Better Auth migration SQL and its independent ledger.
+4. Operators confirm database backup and restore readiness.
+5. Payload migration authority applies the application migration.
+6. Auth migration authority applies the Better Auth migration.
+7. Deployment applies and verifies runtime grants and database constraints.
+8. Agent 14 regenerates and verifies Payload types.
+9. The application runtime starts without schema push.
+10. Readiness validates required schema state without exposing sensitive
+    schema or credential details.
+11. Primary-owner bootstrap becomes eligible only after every required schema,
+    transaction, grant, and locking guarantee is proven.
+
+Before these migrations and guarantees exist, private operational functionality
+and owner bootstrap remain fail closed. Missing tables are never auto-created
+at runtime.
 
 ## Future integration decisions
 
@@ -390,7 +469,7 @@ If the business chooses invite-only client onboarding, reject public sign-up thr
 
 ### Staff invitation and administrator provisioning
 
-Do not use the Organization plugin solely to obtain invitations; the portal has no approved multi-tenant organization model. Implement an application-owned `portal_identity.staff_invitations` workflow with a cryptographically random, hashed, single-use token; exact invited email; allowlisted role; inviter ID; 24-hour expiry; revocation and consumption timestamps; and immutable audit events. Acceptance requires email verification, an active invitation, and MFA enrollment before staff authorization is granted. Invitation endpoints are server-only and require a fresh MFA-verified administrator session.
+Do not use the Organization plugin solely to obtain invitations; the portal has no approved multi-tenant organization model. A future application-owned invitation workflow belongs in Payload-managed application persistence; its exact collection schema remains Slice 2 work. It requires a cryptographically random, hashed, single-use token; exact invited email; allowlisted role; inviter ID; 24-hour expiry; revocation and consumption timestamps; and immutable audit events. Acceptance requires email verification, an active invitation, and MFA enrollment before staff authorization is granted. Invitation endpoints are server-only and require a fresh MFA-verified administrator session.
 
 The first portal administrator is provisioned by a one-time, non-web, audited bootstrap procedure with no committed password. Later administrators are invited or promoted only by an existing administrator using fresh MFA, explicit reauthentication, and dual approval. Public registration and ordinary staff invitation can never create or promote an administrator.
 
@@ -452,7 +531,7 @@ All items are mandatory before adding Better Auth to the application:
 2. The approved operational Staff values—`expiresIn = 28_800`, `disableSessionRefresh = true`, and `freshAge = 900`—are encoded and tested while preserving separate MFA and freshness checks. Security owners approve the remaining cookie policy, exact production/staging origins, trusted proxy behavior, rate-limit storage, and audit requirements.
 3. A transactional email provider and verified domain are operational with SPF/DKIM/DMARC, English/Spanish templates, monitoring, and secret management.
 4. Staff/administrator TOTP enrollment, backup-code handling, lost-factor recovery, step-up rules, and break-glass ownership are approved and testable.
-5. PostgreSQL roles and the `portal_auth` and `portal_identity` schemas are designed with least privilege; Payload, Better Auth, and application migrations have separate directories, ledgers, locks, and deployment/rollback procedures.
+5. PostgreSQL roles for the existing Payload-managed schema and the separate `portal_auth` schema are designed with least privilege; Payload and Better Auth migrations retain separate directories, ledgers, locks, authorities, and deployment/rollback procedures, with no cross-domain DDL.
 6. The exact Better Auth version is pinned and its core, Admin, and two-factor generated SQL is reviewed. Any version newer than `1.6.23` repeats this spike's install, build, schema-diff, session, origin, and migration tests.
 7. The server-only principal/session boundary and resource-authorization matrix are reviewed; no client-side or proxy cookie check is accepted as authorization.
 8. The invitation data model and client-role non-escalation controls are implemented in tests before registration endpoints are exposed.

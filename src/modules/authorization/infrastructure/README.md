@@ -189,6 +189,8 @@ field contracts, explicitly deny unimplemented mutations, and preserve the
 same request object through security-sensitive hooks. CMS users remain outside
 this portal identity path.
 
-Agent 14 remains responsible for physical schema and final transaction proof.
-Agent 10/12 add no table, field, index, constraint, grant, migration, generated
-Payload type, or schema-ownership decision.
+ADR 0010's 2026-08-20 decision places the four operational collections in the
+existing Payload-managed schema and migration lifecycle. Agent 14 remains
+responsible for the additive Payload migration, generated types, role/grant
+strategy, and final transaction proof. Agent 10/12 add no table, field, index,
+constraint, grant, migration, or generated Payload type.

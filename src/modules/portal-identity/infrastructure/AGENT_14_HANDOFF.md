@@ -5,6 +5,14 @@ It does not belong in Better Auth's `portal_auth` schema and must not be linked
 to either Staff or Client by email. Agent 13 owns collection registration;
 Agent 14 owns the reviewed migration and physical constraint names.
 
+ADR 0010's 2026-08-20 superseding decision places this Payload collection in
+the adapter's existing/default `public` schema. Its authoritative migration
+mechanism is `src/modules/cms/migrations` with the existing
+`payload_migrations` ledger. Do not create a separate `portal_identity`
+PostgreSQL schema. Agent 14 applies the reviewed migration with deployment DDL
+authority separate from the least-privilege runtime role and retains ownership
+of generated Payload types.
+
 ## Required columns
 
 - Payload primary key and its conventional `created_at` / `updated_at` columns.
@@ -47,8 +55,10 @@ Application hooks reject every PortalIdentity update, including a submitted
 unchanged binding. The migration must preserve the same rule for privileged or
 out-of-band SQL: revoke ordinary `UPDATE` access to this table and/or add a
 trigger that rejects changes to `auth_user_id`, `subject_type`, `staff_id`, and
-`client_id`. No delete workflow is introduced by Agent 6; any later teardown
-service requires its own reviewed lifecycle and audit design.
+`client_id`. The target runtime grant is narrowly approved `SELECT` and
+`INSERT`; ordinary runtime receives no `UPDATE`, `DELETE`, or `TRUNCATE`. No
+delete workflow is introduced by Agent 6; any later teardown service requires
+its own reviewed lifecycle and audit design.
 
 ## Minimum Agent 11 read shape
 

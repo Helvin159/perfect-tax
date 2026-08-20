@@ -102,9 +102,13 @@ factory, or role-to-system-capability conversion.
 
 ## Agent 14 physical database handoff
 
-Agent 14 must resolve the ADR 0010 `portal_identity` schema versus Payload
-collection ownership discrepancy before changing the readiness guard. Agent 12
-is neutral on that physical decision and creates no migration.
+ADR 0010's 2026-08-20 superseding decision resolves the former schema
+discrepancy. Staff, Clients, PortalIdentity, and SecurityEvents are
+Payload-managed collections in the adapter's existing/default `public` schema.
+They use `src/modules/cms/migrations` and the existing `payload_migrations`
+ledger; no separate `portal_identity` schema is created for them. Agent 14 owns
+the additive Payload migration, generated Payload types, production role/grant
+strategy, and physical proof. Agent 12 remains migration-neutral.
 
 The reviewed physical implementation must prove:
 
