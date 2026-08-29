@@ -2,6 +2,7 @@ import 'server-only';
 
 import type {
   Access,
+  CollectionBeforeDeleteHook,
   CollectionBeforeValidateHook,
   CollectionConfig,
   Field,
@@ -116,6 +117,11 @@ export const enforcePortalIdentityInvariants: CollectionBeforeValidateHook = ({
 
 export const denyPortalIdentityAccess: Access = () => false;
 
+/** Binding teardown is not a Slice 1 lifecycle operation, even under bypass. */
+export const denyPortalIdentityDelete: CollectionBeforeDeleteHook = () => {
+  throw new PortalIdentityInvariantError('immutable-binding');
+};
+
 const immutableRelationshipField = (
   name: 'client' | 'staff',
   relationTo: 'clients' | 'staff',
@@ -178,6 +184,7 @@ export const PortalIdentities: CollectionConfig = {
   ],
   graphQL: false,
   hooks: {
+    beforeDelete: [denyPortalIdentityDelete],
     beforeValidate: [enforcePortalIdentityInvariants],
   },
   labels: {

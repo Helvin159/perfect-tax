@@ -280,9 +280,7 @@ describe('authorization policy semantics with test-only provenance', () => {
         for (const field of CLIENT_POLICY_FIELDS) {
           expect(
             policies.decideClientFieldUpdate(staff(role), field).allowed,
-          ).toBe(
-            ['firstName', 'lastName', 'contactEmail', 'phone'].includes(field),
-          );
+          ).toBe(['firstName', 'lastName', 'contactEmail'].includes(field));
         }
       },
     );

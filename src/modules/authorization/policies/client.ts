@@ -24,10 +24,7 @@ export const CLIENT_POLICY_FIELDS = [
   'firstName',
   'lastName',
   'contactEmail',
-  'phone',
   'status',
-  'authUserId',
-  'portalIdentity',
   'createdAt',
   'updatedAt',
 ] as const;
@@ -42,7 +39,6 @@ const basicClientFieldSet = new Set<string>([
   'firstName',
   'lastName',
   'contactEmail',
-  'phone',
 ]);
 
 export function isClientPolicyOperation(

@@ -1,5 +1,6 @@
 export {
   denyPortalIdentityAccess,
+  denyPortalIdentityDelete,
   enforcePortalIdentityInvariants,
   parsePortalIdentityPersistenceRecord,
   PORTAL_IDENTITIES_SLUG,
