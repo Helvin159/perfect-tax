@@ -8,6 +8,7 @@ import { getServerEnvironment } from './src/config/env/values';
 import { PublicMedia } from './src/modules/content/public-media';
 import { Services } from './src/modules/content/services';
 import { CmsUsers } from './src/modules/cms/users/collection';
+import { PRIVATE_OPERATIONAL_COLLECTIONS } from './src/modules/authorization/infrastructure/private-collection-registration';
 import { BusinessIdentity } from './src/modules/settings/business-identity';
 import { ContactSettings } from './src/modules/settings/contact-settings';
 import { HomepageContent } from './src/modules/settings/homepage-content';
@@ -29,7 +30,12 @@ export default buildConfig({
     },
     user: 'cms-users',
   },
-  collections: [CmsUsers, Services, PublicMedia],
+  collections: [
+    CmsUsers,
+    Services,
+    PublicMedia,
+    ...PRIVATE_OPERATIONAL_COLLECTIONS,
+  ],
   db: postgresAdapter({
     migrationDir: path.resolve(rootDirectory, 'src/modules/cms/migrations'),
     pool: {

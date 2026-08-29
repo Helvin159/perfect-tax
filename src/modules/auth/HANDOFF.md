@@ -217,7 +217,10 @@ and timestamps as listed:
 
 The dedicated connection is `PORTAL_AUTH_DATABASE_URL`. Runtime connections set
 `search_path=portal_auth,public`; the database role must independently default to
-that search path, own only Better Auth DDL/DML in `portal_auth`, and have no
-Payload DDL or cross-schema ownership. Payload's `DATABASE_URL`, migrations,
-ledger, schema push setting, generated types, `payload.config.ts`, `/api/cms`,
-`cms-users`, and CMS cookies remain unchanged.
+that search path, receive only the Better Auth DML required at runtime in
+`portal_auth`, and have no DDL or cross-schema ownership. A separate auth
+migration/deployment authority applies the reviewed Better Auth DDL and cannot
+alter Payload tables. Payload migration authority cannot alter `portal_auth`.
+Payload's `DATABASE_URL`, migrations, ledger, schema push setting, generated
+types, `payload.config.ts`, `/api/cms`, `cms-users`, and CMS cookies remain
+unchanged.

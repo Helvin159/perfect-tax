@@ -5,6 +5,7 @@ vi.mock('server-only', () => ({}));
 
 import {
   denyPortalIdentityAccess,
+  denyPortalIdentityDelete,
   enforcePortalIdentityInvariants,
   parsePortalIdentityPersistenceRecord,
   PortalIdentities,
@@ -97,6 +98,15 @@ describe('PortalIdentity collection', () => {
         } as never),
       ).toThrowError(new PortalIdentityInvariantError('immutable-binding'));
     }
+  });
+
+  it('rejects deletion in an invariant hook even when access is bypassed', () => {
+    expect(() => denyPortalIdentityDelete({} as never)).toThrowError(
+      new PortalIdentityInvariantError('immutable-binding'),
+    );
+    expect(PortalIdentities.hooks?.beforeDelete).toContain(
+      denyPortalIdentityDelete,
+    );
   });
 
   it('contains no status, role, MFA, email, invitation, CMS, or assignment state', () => {

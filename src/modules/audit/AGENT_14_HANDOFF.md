@@ -10,9 +10,11 @@ and generated Payload types.
   Client, or PortalIdentity tables.
 - Give the runtime audit-writer role `INSERT` only. Do not grant `UPDATE`,
   `DELETE`, or `TRUNCATE`. Do not make the application role the table owner.
-- Give migration ownership to a separate migration role. Payload and Better
-  Auth schema generators must have no DDL ownership over this table outside the
-  explicitly reviewed application migration.
+- Generate and review the table through the repository's Payload migration
+  lifecycle in `src/modules/cms/migrations` and its existing
+  `payload_migrations` ledger. Apply it with Payload migration/deployment DDL
+  authority separate from the runtime role. Better Auth migration authority
+  must have no DDL access to this Payload-managed table.
 - Add a database trigger that rejects `UPDATE` and `DELETE` for every role
   other than the narrowly named migration/maintenance role. PostgreSQL table
   owners and superusers can bypass ordinary grants, so deployment must not run

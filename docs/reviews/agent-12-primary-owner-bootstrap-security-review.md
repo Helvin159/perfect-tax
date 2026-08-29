@@ -5,6 +5,14 @@
 **Candidate:** `feat/agent-12` at `9df1d254c66ea89e675426f2336ec1b5e300fcff`  
 **Integration branch at review:** `user-structure` at `89048c7db4b83cd988633c7b870de8ec84a5437a`
 
+> **Post-review architecture note (2026-08-20):** This report accurately
+> records that schema ownership was unresolved at review time. ADR 0010's
+> 2026-08-20 superseding operational collection ownership decision now places
+> Staff, Clients, PortalIdentity, and SecurityEvents in the existing
+> Payload-managed schema and migration lifecycle. References below to resolving
+> `portal_identity` before Agent 13 are historical findings, not an active
+> blocker.
+
 ## 1. Verdict
 
 APPROVE — Agent 12 is safe to merge and the project may proceed to the pre-Agent-13 architecture decision.
