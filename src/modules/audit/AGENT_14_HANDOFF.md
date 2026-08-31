@@ -8,8 +8,12 @@ and generated Payload types.
 
 - Create the table additively; do not modify or reuse CMS, Better Auth, Staff,
   Client, or PortalIdentity tables.
-- Give the runtime audit-writer role `INSERT` only. Do not grant `UPDATE`,
-  `DELETE`, or `TRUNCATE`. Do not make the application role the table owner.
+- Give the runtime role execute permission on the narrowly typed
+  `perfect_tax_append_security_event(...)` function only. The function is
+  `SECURITY DEFINER`, owned by the migration role, and performs the insert in
+  the caller's Payload transaction. Do not grant the runtime role table
+  `SELECT`, `INSERT`, `UPDATE`, `DELETE`, or `TRUNCATE`; do not make the
+  application role the table owner.
 - Generate and review the table through the repository's Payload migration
   lifecycle in `src/modules/cms/migrations` and its existing
   `payload_migrations` ledger. Apply it with Payload migration/deployment DDL
@@ -31,8 +35,9 @@ and generated Payload types.
 - Index `occurredAt`, `action`, and `correlationId`. No search, retention,
   partitioning, analytics, or SIEM work is part of Slice 1.
 - Run clean-install and populated-upgrade tests, including direct SQL attempts
-  to update, delete, and truncate as the runtime role. All must fail while an
-  insert through a source-bound security-event recorder succeeds.
+  to insert, read, update, delete, and truncate as the runtime role. All direct
+  table operations must fail while an insert through a source-bound
+  security-event recorder succeeds through the append function.
 
 The application layer rejects update/delete even when Payload access is
 bypassed, validates every append again inside the collection hook, and accepts

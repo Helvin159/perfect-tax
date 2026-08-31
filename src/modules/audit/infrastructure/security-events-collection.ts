@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { sql } from '@payloadcms/db-postgres';
 import type {
   CollectionBeforeChangeHook,
   CollectionBeforeDeleteHook,
@@ -86,27 +87,75 @@ export const denySecurityEventDelete: CollectionBeforeDeleteHook = () => {
   throw new SecurityEventWriteDeniedError('immutable-event');
 };
 
-type PayloadSecurityEventCreate = (
-  options: Readonly<{
-    collection: typeof SECURITY_EVENTS_SLUG;
-    context: Readonly<Record<string, object>>;
-    data: SecurityEventAppendRecord;
-    depth: 0;
-    overrideAccess: true;
-    req?: PayloadRequest;
-  }>,
-) => Promise<Readonly<{ id: unknown }>>;
+type SecurityEventDatabase = Readonly<{
+  drizzle: unknown;
+  sessions?: Readonly<Record<string, Readonly<{ db: unknown }>>>;
+}>;
+
+function asExecutor(
+  value: unknown,
+): Readonly<{ execute(statement: unknown): Promise<unknown> }> | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const execute = Reflect.get(value, 'execute');
+  if (typeof execute !== 'function') return undefined;
+
+  return { execute: execute.bind(value) };
+}
+
+function resultId(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const rows = Reflect.get(value, 'rows');
+  if (!Array.isArray(rows)) return undefined;
+  const first = rows[0];
+  return typeof first === 'object' && first !== null
+    ? Reflect.get(first, 'id')
+    : undefined;
+}
+
+async function appendSecurityEvent(
+  database: SecurityEventDatabase,
+  record: SecurityEventAppendRecord,
+  req?: PayloadRequest,
+): Promise<Readonly<{ id: unknown }>> {
+  const transactionID = req?.transactionID
+    ? String(await req.transactionID)
+    : undefined;
+  const executor = asExecutor(
+    transactionID ? database.sessions?.[transactionID]?.db : database.drizzle,
+  );
+
+  if (!executor) {
+    throw new SecurityEventWriteDeniedError('append-capability-required');
+  }
+
+  const result = await executor.execute(sql`
+    SELECT "public"."perfect_tax_append_security_event"(
+      ${record.occurredAt}::timestamp with time zone,
+      ${record.action}::"public"."enum_security_events_action",
+      ${record.actorKind}::"public"."enum_security_events_actor_kind",
+      ${record.actorId ?? null}::varchar,
+      ${record.targetType ?? null}::"public"."enum_security_events_target_type",
+      ${record.targetId ?? null}::varchar,
+      ${record.correlationId ?? null}::varchar,
+      ${JSON.stringify(record.metadata)}::jsonb
+    ) AS "id"
+  `);
+
+  return Object.freeze({ id: resultId(result) });
+}
 
 /**
- * Binds the narrow recorder to Payload without exposing the runtime append
- * capability or any update/delete operation to application consumers.
+ * Binds the narrow recorder to Payload's PostgreSQL adapter without granting
+ * the runtime role table reads or direct writes. A success recorder uses the
+ * exact Payload transaction session attached to `req`; a missing session fails
+ * closed instead of silently appending outside the transaction.
  */
 export function createPayloadSecurityEventRecorders<
   PrincipalSource extends object,
   TargetSource extends object,
   SystemSource extends object,
 >(
-  payload: Pick<Payload, 'create'>,
+  payload: Pick<Payload, 'db'>,
   provenance: Readonly<{
     principalResolver: TrustedPrincipalSourceResolver<PrincipalSource>;
     systemResolver: TrustedSystemSourceResolver<SystemSource>;
@@ -117,21 +166,21 @@ export function createPayloadSecurityEventRecorders<
 ): SecurityEventRecorders<PrincipalSource, TargetSource, SystemSource> {
   const capability = Object.freeze({});
   appendCapabilities.add(capability);
-  const create = payload.create.bind(
-    payload,
-  ) as unknown as PayloadSecurityEventCreate;
 
   return createSecurityEventRecorders({
     appendPort: {
-      append: (data) =>
-        create({
-          collection: SECURITY_EVENTS_SLUG,
+      append: (data) => {
+        const validated = enforceSecurityEventAppend({
           context: { [appendCapabilityContextKey]: capability },
           data,
-          depth: 0,
-          overrideAccess: true,
-          ...(req === undefined ? {} : { req }),
-        }),
+          operation: 'create',
+        });
+        return appendSecurityEvent(
+          payload.db as unknown as SecurityEventDatabase,
+          validated,
+          req,
+        );
+      },
     },
     ...(now === undefined ? {} : { now }),
     ...provenance,

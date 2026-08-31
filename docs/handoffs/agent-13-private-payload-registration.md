@@ -80,8 +80,11 @@ physical PostgreSQL proof. Do not enable schema push or auto-create tables.
 
 ### SecurityEvents
 
-- Insert-only runtime grant with no ordinary select, update, delete, or
-  truncate.
+- No direct runtime table privilege. The runtime role invokes the narrowly
+  typed `perfect_tax_append_security_event(...)` function, which is owned by
+  the migration role and executes the insert as `SECURITY DEFINER` inside the
+  caller's Payload transaction; direct select/insert/update/delete/truncate
+  attempts remain denied.
 - Immutable update/delete trigger and action/actor/target checks.
 - Required provenance columns, scalar metadata contract, and indexes for
   occurrence time, action, and correlation ID.
@@ -122,3 +125,12 @@ With real PostgreSQL and the Agent 14 artifacts, prove:
 Before Agent 14, missing physical tables, stale generated Payload types, closed
 bootstrap readiness, and the absence of real HTTP/PostgreSQL proof are expected
 and must not be represented as production readiness.
+
+## Agent 14 completion amendment — 2026-08-31
+
+The physical requirements above are now implemented. The four collections map
+to the reviewed Payload migration in `public`, generated types are committed,
+and readiness verifies ownership, constraints, triggers, grants, transaction
+append behavior, and the bootstrap lock. The historical pre-Agent-14 closure
+remains a record of the handoff state; Agent 15 still must provide the real HTTP
+and end-to-end attestation proof.

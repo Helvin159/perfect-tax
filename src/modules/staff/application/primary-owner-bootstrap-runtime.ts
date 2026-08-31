@@ -23,6 +23,7 @@ import {
   type PortalIdentityPersistenceRecord,
 } from '@/modules/portal-identity/infrastructure/portal-identity-collection';
 import { SECURITY_EVENTS_SLUG } from '@/modules/audit/infrastructure/security-events-collection';
+import { verifyOperationalDatabaseContract } from '@/modules/database/operational-schema-verification';
 
 import { STAFF_COLLECTION_SLUG } from '../domain/invariants';
 import {
@@ -62,9 +63,9 @@ function registered(payload: Payload, slug: string): boolean {
  * replace the final fail-closed branch only after reviewed constraints,
  * transaction behavior, and the physical schema decision are deployed.
  */
-export function assertPrimaryOwnerBootstrapRuntimeReady(
+export async function assertPrimaryOwnerBootstrapRuntimeReady(
   payload: Payload,
-): void {
+): Promise<void> {
   if (
     !registered(payload, STAFF_COLLECTION_SLUG) ||
     !registered(payload, PORTAL_IDENTITIES_SLUG) ||
@@ -73,10 +74,13 @@ export function assertPrimaryOwnerBootstrapRuntimeReady(
     throw new PrimaryOwnerBootstrapError('NOT_READY');
   }
 
-  // Agent 14 owns the physical proof. Running before that proof could turn an
-  // application lock into the only one-owner boundary, so production remains
-  // deliberately unavailable even after Agent 13 collection registration.
-  throw new PrimaryOwnerBootstrapError('NOT_READY');
+  try {
+    await verifyOperationalDatabaseContract(
+      (payload as BootstrapPayload).db.pool,
+    );
+  } catch {
+    throw new PrimaryOwnerBootstrapError('NOT_READY');
+  }
 }
 
 export async function loadPrimaryOwnerBootstrapPayload(): Promise<BootstrapPayload> {
@@ -95,7 +99,7 @@ export async function loadPrimaryOwnerBootstrapPayload(): Promise<BootstrapPaylo
   ]);
   const payload = (await getPayload({ config })) as BootstrapPayload;
   try {
-    assertPrimaryOwnerBootstrapRuntimeReady(payload);
+    await assertPrimaryOwnerBootstrapRuntimeReady(payload);
   } catch (error) {
     await payload.destroy();
     throw error;

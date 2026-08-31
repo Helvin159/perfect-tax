@@ -15,6 +15,13 @@
 
 This is not approval to add production authentication in Phase 1. Better Auth remains absent from the application until every Phase 2 entry criterion below is met. A dependency update requires a fresh compatibility and migration review; `1.6.23` is evidence, not a floating-version approval.
 
+**2026-08-31 amendment:** the deferral sentence above is retained as the
+original launch decision, but the reviewed Agent 3–14 foundation is now present
+in this repository. Better Auth `1.6.23` runtime/session/MFA code and its
+isolated migration are not production enablement; the public sign-in page and
+portal workflows remain deferred until every Phase 2 entry criterion and Agent
+15 review is complete.
+
 ## 2026-08-09 Payload authorization-bridge gate
 
 ### Gate decision
@@ -388,9 +395,9 @@ The production runtime role is not the Payload table owner and does not receive
 unrestricted DDL. Agent 14 must implement and verify grants that provide only
 approved DML: PortalIdentity requires narrowly approved `SELECT` and `INSERT`
 with no ordinary `UPDATE`, `DELETE`, or `TRUNCATE`; SecurityEvents is
-append-only with `INSERT` and no read unless a separately reviewed operation
-requires it; Staff and Clients receive only the DML required by approved
-application services. Constraints, triggers, and grants must independently
+append-only through its narrowly typed `SECURITY DEFINER` append function and
+the runtime role has no direct table privilege; Staff and Clients receive only
+the DML required by approved application services. Constraints, triggers, and grants must independently
 protect owner state, immutable bindings, append-only events, Client-number
 uniqueness, status vocabularies, and other server-owned invariants.
 
@@ -413,6 +420,70 @@ Deployment order is:
 Before these migrations and guarantees exist, private operational functionality
 and owner bootstrap remain fail closed. Missing tables are never auto-created
 at runtime.
+
+### 2026-08-31 physical implementation foundation
+
+Agent 14 implemented the decision above. The matrix below is authoritative for
+the physical objects introduced by Slice 1; a table has exactly one DDL owner
+and one migration ledger.
+
+| Table                                                                            | Physical schema            | Migration owner                                              | Migration directory           | Migration ledger                          | Runtime role and grants                                                                                          | Payload DDL owner | Notes                                                                                                                                                       |
+| -------------------------------------------------------------------------------- | -------------------------- | ------------------------------------------------------------ | ----------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Staff                                                                            | `public.staff`             | Payload migration authority (`perfect_tax_payload_migrator`) | `src/modules/cms/migrations`  | `public.payload_migrations`               | `perfect_tax_payload_runtime`: `SELECT`, `INSERT` only                                                           | Yes               | Owner marker/active checks, case-insensitive email uniqueness, and protected-owner trigger are database-enforced.                                           |
+| Clients                                                                          | `public.clients`           | Payload migration authority (`perfect_tax_payload_migrator`) | `src/modules/cms/migrations`  | `public.payload_migrations`               | `perfect_tax_payload_runtime`: `SELECT` only                                                                     | Yes               | Client number format, uniqueness, and immutability are database-enforced; creates remain service-owned.                                                     |
+| PortalIdentity                                                                   | `public.portal_identities` | Payload migration authority (`perfect_tax_payload_migrator`) | `src/modules/cms/migrations`  | `public.payload_migrations`               | `perfect_tax_payload_runtime`: `SELECT`, `INSERT` only                                                           | Yes               | Restrictive foreign keys plus immutable row/truncate triggers prevent rebinding or deletion.                                                                |
+| SecurityEvents                                                                   | `public.security_events`   | Payload migration authority (`perfect_tax_payload_migrator`) | `src/modules/cms/migrations`  | `public.payload_migrations`               | `perfect_tax_payload_runtime`: execute `public.perfect_tax_append_security_event(...)` only; no table privileges | Yes               | A `SECURITY DEFINER` append function is the only database write path. The function is owned by the migration role and executes in the caller's transaction. |
+| Better Auth core/MFA (`user`, `session`, `account`, `verification`, `twoFactor`) | `portal_auth`              | Auth migration authority (`perfect_tax_auth_migrator`)       | `src/modules/auth/migrations` | `portal_auth.perfect_tax_auth_migrations` | `perfect_tax_auth_runtime`: Better Auth DML in `portal_auth` only                                                | No                | Generated from Better Auth `1.6.23` plus the approved two-factor configuration; never registered as Payload collections.                                    |
+
+The Payload migration is `20260831_171654_agent_14_operational_schema` in
+`src/modules/cms/migrations`. It is additive and registered in
+`payload_migrations`; `push: false` remains mandatory. The Better Auth SQL is
+`20260831_172000_agent_14_better_auth_core_mfa` in
+`src/modules/auth/migrations`, applied by the deterministic runner
+`pnpm auth:migrate`, which takes an advisory lock and records the SQL in its
+own ledger. Neither migration runner can alter the other schema.
+
+Payload collection registration maps one-to-one to the four `public` physical
+tables through Agent 13's private registration and the normal Payload adapter;
+it is not a second repository or DDL owner. The registrations set
+`endpoints: false`, `lockDocuments: false`, hidden Admin navigation, disabled
+GraphQL exposure, fixed access policies, and `overrideAccess: false` for
+user-driven calls. SecurityEvents does not use Payload's direct table insert
+because Payload requests a full `RETURNING` projection; its recorder invokes
+the append function through the exact Payload Drizzle transaction session.
+This keeps the table unreadable and prevents a direct runtime table write while
+preserving transaction atomicity.
+
+Deployment is ordered as follows: provision the four dedicated login roles and
+schema grants; apply the Payload migration as the Payload migration role; apply
+the Better Auth migration as the auth migration role; apply the two runtime
+grant scripts; regenerate/verify Payload types; verify migration ledgers,
+constraints, ownership comments, triggers, and role attributes; then start the
+application. Readiness and primary-owner bootstrap fail closed until the
+Payload physical contract is present. Runtime processes never run schema push
+or migrations.
+
+Local development and CI use the same scripts against a disposable PostgreSQL
+17 database. `scripts/database/provision-roles.sql` is run by a database admin,
+`pnpm cms:migrate` and `pnpm auth:migrate` run under their respective migration
+roles, and the runtime grant scripts are applied before the application role is
+used. The opt-in integration test creates a populated upgrade database,
+applies both migration systems twice, and proves CMS preservation, ownership,
+least privilege, immutable bindings, append-only events, transaction rollback,
+and advisory-lock serialization.
+
+Forward migrations are the production rollback policy. A reviewed down
+migration may be used only before release or on a disposable database; no
+production rollback drops operational or authentication tables. Restore from a
+verified backup and deploy a forward repair migration instead. Any future
+Payload or Better Auth upgrade must retain the separate ledgers, roles,
+schemas, and append function contract.
+
+Agent 13's registration is now physically backed by this migration and may
+proceed to real HTTP/Local API exposure tests without changing CMS identity
+ownership. Agent 15 must prove the transport boundary, attestation and
+canonical-principal paths, fixed projections, and no Admin/REST/GraphQL leak;
+it must not replace the migration or grant model.
 
 ## Future integration decisions
 
@@ -544,7 +615,7 @@ All items are mandatory before adding Better Auth to the application:
 - The business has not yet selected public versus invite-only client registration or approved portal role ownership.
 - Transactional email provider, sender-domain controls, delivery monitoring, bilingual templates, and support recovery procedures are undecided.
 - Distributed rate-limit storage, trusted-device use, and proxy-header ownership need threat-model approval.
-- Better Auth's direct Kysely `migrate` reconciles live state without the migration ledger observed in Payload; the proposed reviewed-SQL ledger and rollback workflow still needs implementation proof.
+- Better Auth's direct Kysely `migrate` reconciles live state without the migration ledger observed in Payload. Agent 14 now supplies the reviewed-SQL ledger and runner; full production rollback/restore rehearsal remains a launch criterion.
 - Admin and two-factor plugins were schema-inspected but their complete runtime flows, recovery edge cases, and role-escalation controls were not production-validated.
 - TOTP is not phishing-resistant. Passkeys/WebAuthn, device loss, and staff break-glass recovery remain future decisions.
 - Account deletion and anonymization depend on legal retention rules for tax, administrative, document, and audit records.
@@ -585,7 +656,7 @@ The final runtime scan covered `package.json`, `pnpm-lock.yaml`, the ignored loc
 - [x] Future route, cookie, origin, CSRF, session, registration, roles, invitations, provisioning, recovery, email, MFA, locale, lifecycle, testing, linking, and rollback decisions are recorded.
 - [x] The ADR contains a go/no-go conclusion, Phase 2 entry criteria, and unresolved risks.
 - [x] Disposable workspace, containers, network, database objects, credentials, routes, schemas, generated files, and migrations removed.
-- [x] Application dependencies, source, environment example, and lockfile contain no Better Auth runtime infrastructure.
+- [x] (Historical spike baseline) Application dependencies, source, environment example, and lockfile contained no Better Auth runtime infrastructure before the Agent 3–14 foundation amendment.
 - [x] Clean application install, lint, format, typecheck, test, and build pass.
 - [x] Final forbidden-artifact search is documented.
 

@@ -1127,6 +1127,43 @@ if (import.meta.vitest) {
     const auditAttempts: unknown[] = [];
     const auditCreateRequests: Array<Record<string, unknown>> = [];
     const persistedEvents: unknown[] = [];
+    const execute = vi.fn(async (statement: unknown) => {
+      const chunks =
+        isRecord(statement) && Array.isArray(statement.queryChunks)
+          ? statement.queryChunks
+          : [];
+      const values = chunks.filter(
+        (chunk) =>
+          !isRecord(chunk) ||
+          !Object.hasOwn(chunk, 'value') ||
+          !Array.isArray(chunk.value),
+      );
+      const [
+        occurredAt,
+        action,
+        actorKind,
+        actorId,
+        targetType,
+        targetId,
+        correlationId,
+        metadata,
+      ] = values;
+      const data = {
+        action,
+        actorId,
+        actorKind,
+        correlationId,
+        metadata:
+          typeof metadata === 'string' ? JSON.parse(metadata) : metadata,
+        occurredAt,
+        targetId,
+        targetType,
+      };
+      auditAttempts.push(data);
+      if (options.auditFailure) return { rows: [{ id: 'invalid-event-id' }] };
+      persistedEvents.push(data);
+      return { rows: [{ id: persistedEvents.length }] };
+    });
     const create = vi.fn(async (request: Record<string, unknown>) => {
       auditCreateRequests.push(request);
       auditAttempts.push(request.data);
@@ -1134,7 +1171,10 @@ if (import.meta.vitest) {
       persistedEvents.push(request.data);
       return { id: persistedEvents.length };
     });
-    const payload = { create } as unknown as ConcreteBootstrapPayload;
+    const payload = {
+      create,
+      db: { drizzle: { execute } },
+    } as unknown as ConcreteBootstrapPayload;
     const commit = vi.fn(async () => undefined);
     const rollback = vi.fn(async () => undefined);
     const prepare = vi.fn(async (): Promise<PendingPrimaryOwnerPersistence> => {
@@ -1188,6 +1228,7 @@ if (import.meta.vitest) {
     return {
       auditAttempts,
       auditCreateRequests,
+      execute,
       commit,
       dependencies,
       get credentialCompensated() {
@@ -1218,8 +1259,8 @@ if (import.meta.vitest) {
       expect(harness.prepare).toHaveBeenCalledOnce();
       expect(harness.commit).toHaveBeenCalledOnce();
       expect(harness.rollback).not.toHaveBeenCalled();
+      expect(harness.execute).toHaveBeenCalledOnce();
       expect(harness.persistedEvents).toHaveLength(1);
-      expect(harness.auditCreateRequests[0]).toHaveProperty('req');
       expect(harness.persistedEvents[0]).toMatchObject({
         action: 'primary-owner.bootstrap.succeeded',
         actorKind: 'system',
@@ -1244,8 +1285,8 @@ if (import.meta.vitest) {
 
       expect(harness.credentialCreated).toBe(0);
       expect(harness.prepare).not.toHaveBeenCalled();
+      expect(harness.execute).toHaveBeenCalledOnce();
       expect(harness.persistedEvents).toHaveLength(1);
-      expect(harness.auditCreateRequests[0]).not.toHaveProperty('req');
       expect(harness.persistedEvents[0]).toMatchObject({
         action: 'primary-owner.bootstrap.failed',
         actorKind: 'system',
@@ -1266,6 +1307,7 @@ if (import.meta.vitest) {
 
       expect(harness.credentialCreated).toBe(0);
       expect(harness.prepare).not.toHaveBeenCalled();
+      expect(harness.execute).toHaveBeenCalledOnce();
       expect(harness.persistedEvents).toHaveLength(1);
       expect(harness.persistedEvents[0]).toMatchObject({
         action: 'primary-owner.bootstrap.failed',
@@ -1310,6 +1352,7 @@ if (import.meta.vitest) {
         expect(harness.credentialCreated).toBe(1);
         expect(harness.credentialCompensated).toBe(1);
         expect(harness.commit).not.toHaveBeenCalled();
+        expect(harness.execute).toHaveBeenCalledOnce();
         expect(harness.persistedEvents).toHaveLength(1);
         expect(harness.persistedEvents[0]).toMatchObject({
           action: 'primary-owner.bootstrap.failed',
@@ -1333,6 +1376,7 @@ if (import.meta.vitest) {
       expect(harness.commit).not.toHaveBeenCalled();
       expect(harness.rollback).toHaveBeenCalledOnce();
       expect(harness.credentialCompensated).toBe(1);
+      expect(harness.execute).toHaveBeenCalledOnce();
       expect(harness.auditAttempts).toHaveLength(1);
       expect(harness.persistedEvents).toHaveLength(0);
       expect(JSON.stringify(harness.auditAttempts)).not.toContain(

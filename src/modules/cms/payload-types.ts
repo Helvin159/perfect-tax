@@ -70,6 +70,10 @@ export interface Config {
     'cms-users': CmsUser;
     services: Service;
     'public-media': PublicMedia;
+    staff: Staff;
+    clients: Client;
+    'portal-identities': PortalIdentity;
+    'security-events': SecurityEvent;
     'payload-kv': PayloadKv;
     'payload-locked-documents': PayloadLockedDocument;
     'payload-preferences': PayloadPreference;
@@ -80,6 +84,11 @@ export interface Config {
     'cms-users': CmsUsersSelect<false> | CmsUsersSelect<true>;
     services: ServicesSelect<false> | ServicesSelect<true>;
     'public-media': PublicMediaSelect<false> | PublicMediaSelect<true>;
+    staff: StaffSelect<false> | StaffSelect<true>;
+    clients: ClientsSelect<false> | ClientsSelect<true>;
+    'portal-identities':
+      PortalIdentitiesSelect<false> | PortalIdentitiesSelect<true>;
+    'security-events': SecurityEventsSelect<false> | SecurityEventsSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-locked-documents':
       PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
@@ -260,6 +269,96 @@ export interface PublicMedia {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "staff".
+ */
+export interface Staff {
+  id: number;
+  firstName: string;
+  lastName: string;
+  workEmail: string;
+  role: 'owner' | 'administrator' | 'case-worker' | 'intake';
+  status: 'active' | 'disabled';
+  /**
+   * Server-owned primary-owner marker. Owner transfer is not supported.
+   */
+  isPrimaryOwner: boolean;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "clients".
+ */
+export interface Client {
+  id: number;
+  /**
+   * Server-generated business reference. It is not a database ID or credential and cannot be changed.
+   */
+  clientNumber: string;
+  firstName: string;
+  lastName: string;
+  /**
+   * Contact data only. Editing this value never changes login credentials or creates a portal identity.
+   */
+  contactEmail: string;
+  status: 'active' | 'inactive';
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "portal-identities".
+ */
+export interface PortalIdentity {
+  id: number;
+  authUserId: string;
+  subjectType: 'staff' | 'client';
+  staff?: (number | null) | Staff;
+  client?: (number | null) | Client;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "security-events".
+ */
+export interface SecurityEvent {
+  id: number;
+  occurredAt: string;
+  action:
+    | 'primary-owner.bootstrap.succeeded'
+    | 'primary-owner.bootstrap.failed'
+    | 'authentication.succeeded'
+    | 'authentication.failed'
+    | 'session.ended'
+    | 'mfa.enrollment.succeeded'
+    | 'mfa.verification.succeeded'
+    | 'mfa.verification.failed'
+    | 'domain-subject.disabled'
+    | 'authorization.denied';
+  actorKind:
+    | 'anonymous'
+    | 'system'
+    | 'auth-user'
+    | 'staff'
+    | 'client'
+    | 'staff-enrollment';
+  actorId?: string | null;
+  targetType?: ('auth-user' | 'staff' | 'client') | null;
+  targetId?: string | null;
+  correlationId?: string | null;
+  metadata:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv".
  */
 export interface PayloadKv {
@@ -433,6 +532,59 @@ export interface PublicMediaSelect<T extends boolean = true> {
   height?: T;
   focalX?: T;
   focalY?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "staff_select".
+ */
+export interface StaffSelect<T extends boolean = true> {
+  firstName?: T;
+  lastName?: T;
+  workEmail?: T;
+  role?: T;
+  status?: T;
+  isPrimaryOwner?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "clients_select".
+ */
+export interface ClientsSelect<T extends boolean = true> {
+  clientNumber?: T;
+  firstName?: T;
+  lastName?: T;
+  contactEmail?: T;
+  status?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "portal-identities_select".
+ */
+export interface PortalIdentitiesSelect<T extends boolean = true> {
+  authUserId?: T;
+  subjectType?: T;
+  staff?: T;
+  client?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "security-events_select".
+ */
+export interface SecurityEventsSelect<T extends boolean = true> {
+  occurredAt?: T;
+  action?: T;
+  actorKind?: T;
+  actorId?: T;
+  targetType?: T;
+  targetId?: T;
+  correlationId?: T;
+  metadata?: T;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema

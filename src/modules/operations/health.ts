@@ -4,6 +4,7 @@ import { Pool } from 'pg';
 
 import { getServerEnvironment } from '@/config/env/server';
 import { REQUIRED_CMS_MIGRATIONS } from '@/modules/cms/required-migrations';
+import { verifyOperationalDatabaseContract } from '@/modules/database/operational-schema-verification';
 
 export type HealthStatus = 'ok' | 'ready' | 'unavailable';
 
@@ -80,6 +81,8 @@ export async function checkPostgresReachable(databaseUrl: string) {
     if (!REQUIRED_CMS_MIGRATIONS.every((name) => applied.has(name))) {
       throw new Error('cms-schema-unavailable');
     }
+
+    await verifyOperationalDatabaseContract(pool);
   } finally {
     await pool.end().catch(() => undefined);
   }

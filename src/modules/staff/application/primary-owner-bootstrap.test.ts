@@ -408,12 +408,12 @@ describe('PostgreSQL-backed serialization seam and readiness', () => {
     expect(owners).toBe(1);
   });
 
-  it('fails closed before Agent 13 registration and Agent 14 physical proof', () => {
-    expect(() =>
+  it('fails closed before Agent 13 registration and Agent 14 physical proof', async () => {
+    await expect(
       assertPrimaryOwnerBootstrapRuntimeReady({ collections: {} } as Payload),
-    ).toThrow(new PrimaryOwnerBootstrapError('NOT_READY'));
+    ).rejects.toThrow(new PrimaryOwnerBootstrapError('NOT_READY'));
 
-    expect(() =>
+    await expect(
       assertPrimaryOwnerBootstrapRuntimeReady({
         collections: {
           'portal-identities': {},
@@ -421,6 +421,6 @@ describe('PostgreSQL-backed serialization seam and readiness', () => {
           staff: {},
         },
       } as unknown as Payload),
-    ).toThrow(new PrimaryOwnerBootstrapError('NOT_READY'));
+    ).rejects.toThrow(new PrimaryOwnerBootstrapError('NOT_READY'));
   });
 });

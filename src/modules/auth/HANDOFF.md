@@ -224,3 +224,11 @@ alter Payload tables. Payload migration authority cannot alter `portal_auth`.
 Payload's `DATABASE_URL`, migrations, ledger, schema push setting, generated
 types, `payload.config.ts`, `/api/cms`, `cms-users`, and CMS cookies remain
 unchanged.
+
+Agent 14 implemented these requirements in
+`src/modules/auth/migrations/20260831_172000_agent_14_better_auth_core_mfa.sql`.
+`scripts/database/apply-auth-migrations.ts` applies the reviewed SQL under the
+auth migration role, takes a dedicated advisory lock, and records the result in
+`portal_auth.perfect_tax_auth_migrations`. The runtime grant script gives
+Better Auth DML only in `portal_auth`; it cannot read or mutate that ledger and
+has no Payload/public schema authority.

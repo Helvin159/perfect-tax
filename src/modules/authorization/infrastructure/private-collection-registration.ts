@@ -66,6 +66,9 @@ export const PrivateStaff: CollectionConfig = {
     ...staffCollection.admin,
     hidden: true,
   },
+  disableBulkEdit: true,
+  endpoints: false,
+  lockDocuments: false,
 };
 
 /**
@@ -84,7 +87,10 @@ export const PrivateClients: CollectionConfig = {
     hidden: true,
   },
   disableBulkDelete: true,
+  disableBulkEdit: true,
+  endpoints: false,
   fields: Clients.fields.map(protectClientField),
+  lockDocuments: false,
 };
 
 export const PrivatePortalIdentities: CollectionConfig = {
@@ -97,6 +103,9 @@ export const PrivatePortalIdentities: CollectionConfig = {
     ...PortalIdentities.admin,
     hidden: true,
   },
+  disableBulkEdit: true,
+  endpoints: false,
+  lockDocuments: false,
 };
 
 export const PrivateSecurityEvents: CollectionConfig = {
@@ -109,6 +118,9 @@ export const PrivateSecurityEvents: CollectionConfig = {
     ...SecurityEvents.admin,
     hidden: true,
   },
+  disableBulkEdit: true,
+  endpoints: false,
+  lockDocuments: false,
 };
 
 export const PRIVATE_OPERATIONAL_COLLECTIONS = [

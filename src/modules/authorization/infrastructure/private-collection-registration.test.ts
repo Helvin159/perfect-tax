@@ -76,7 +76,9 @@ describe('private operational collection registration', () => {
     for (const collection of PRIVATE_OPERATIONAL_COLLECTIONS) {
       expect(collection.auth).toBeUndefined();
       expect(collection.admin?.hidden).toBe(true);
+      expect(collection.endpoints).toBe(false);
       expect(collection.graphQL).toBe(false);
+      expect(collection.lockDocuments).toBe(false);
     }
   });
 

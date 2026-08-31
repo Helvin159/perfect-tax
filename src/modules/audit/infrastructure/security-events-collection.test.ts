@@ -1,4 +1,4 @@
-import type { Payload, PayloadRequest } from 'payload';
+import type { PayloadRequest } from 'payload';
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
@@ -85,16 +85,9 @@ describe('SecurityEvents collection boundary', () => {
     if (!principal) throw new Error('invalid principal fixture');
     principalBindings.set(principalSource, principal);
 
-    const create = vi.fn(async (operation: Record<string, unknown>) => {
-      enforceSecurityEventAppend({
-        context: operation.context,
-        data: operation.data,
-        operation: 'create',
-      });
-      return { id: 9 };
-    });
+    const execute = vi.fn(async () => ({ rows: [{ id: 9 }] }));
     const recorders = createPayloadSecurityEventRecorders(
-      { create } as unknown as Pick<Payload, 'create'>,
+      { db: { drizzle: { execute }, sessions: {} } } as never,
       {
         principalResolver: {
           resolvePrincipal: (source: PrincipalSource) =>
@@ -113,13 +106,7 @@ describe('SecurityEvents collection boundary', () => {
       }),
     ).resolves.toMatchObject({ eventId: 9 });
 
-    expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        collection: 'security-events',
-        depth: 0,
-        overrideAccess: true,
-      }),
-    );
+    expect(execute).toHaveBeenCalledOnce();
   });
 
   it('keeps ordinary consumers on source-bound APIs with no generic recorder', () => {
@@ -141,9 +128,19 @@ describe('SecurityEvents collection boundary', () => {
     const transactionRequest = {
       transactionID: 'bootstrap-transaction',
     } as PayloadRequest;
-    const create = vi.fn(async () => ({ id: 10 }));
+    const transactionExecute = vi.fn(async () => ({ rows: [{ id: 10 }] }));
+    const outsideTransactionExecute = vi.fn(async () => ({
+      rows: [{ id: 999 }],
+    }));
     const recorders = createPayloadSecurityEventRecorders(
-      { create } as unknown as Pick<Payload, 'create'>,
+      {
+        db: {
+          drizzle: { execute: outsideTransactionExecute },
+          sessions: {
+            'bootstrap-transaction': { db: { execute: transactionExecute } },
+          },
+        },
+      } as never,
       {
         principalResolver: { resolvePrincipal: () => undefined },
         systemResolver: {
@@ -166,12 +163,7 @@ describe('SecurityEvents collection boundary', () => {
       action: 'primary-owner.bootstrap.failed',
     });
 
-    expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        collection: 'security-events',
-        overrideAccess: true,
-        req: transactionRequest,
-      }),
-    );
+    expect(transactionExecute).toHaveBeenCalledOnce();
+    expect(outsideTransactionExecute).not.toHaveBeenCalled();
   });
 });

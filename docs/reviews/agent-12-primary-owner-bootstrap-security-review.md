@@ -200,3 +200,17 @@ No real PostgreSQL bootstrap concurrency or transaction test was run, and this a
 
 Agent 12 is safe to merge.
 Proceed to resolve the application-schema ownership decision before Agent 13.
+
+## 22. Agent 14 closure amendment — 2026-08-31
+
+The pending physical proof described above is now supplied by Agent 14. ADR
+0010's 2026-08-31 matrix makes Payload the sole owner of the four Slice 1
+operational tables in `public`, while Better Auth remains independently owned
+in `portal_auth`. The committed PostgreSQL integration test proves migration
+idempotence, populated-upgrade preservation, exact ownership comments,
+cross-schema DDL isolation, runtime grants, owner uniqueness/protection,
+immutable PortalIdentity rows, append-only SecurityEvents through the typed
+definer function, transaction rollback, and advisory-lock serialization. The
+readiness guard now verifies this physical contract before bootstrap can run.
+Agent 15 still owns real HTTP exposure and end-to-end attestation regression;
+this amendment does not expand Agent 12's approved security boundary.

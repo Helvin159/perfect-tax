@@ -136,3 +136,11 @@ Agent 15 must run the real PostgreSQL concurrent-attempt and transaction-failure
 proofs. Exactly one attempt may succeed, the other must be denied, and the
 database must contain exactly one canonical primary Owner and one explicit
 PortalIdentity binding.
+
+## Agent 14 completion amendment — 2026-08-31
+
+The physical contract is now implemented and the readiness guard is open only
+for a registered Payload instance whose database verifies that contract. The
+historical “leave readiness closed” instruction above describes the pre-Agent-14
+handoff state. Agent 15 remains responsible for the real concurrent bootstrap
+and HTTP/end-to-end security proof.
