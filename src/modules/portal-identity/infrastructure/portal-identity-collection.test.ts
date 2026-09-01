@@ -7,6 +7,7 @@ import {
   denyPortalIdentityAccess,
   denyPortalIdentityDelete,
   enforcePortalIdentityInvariants,
+  normalizePayloadPortalIdentityCreateData,
   parsePortalIdentityPersistenceRecord,
   PortalIdentities,
   PortalIdentityInvariantError,
@@ -22,6 +23,121 @@ function namedField(name: string): Field & { name: string } {
 }
 
 describe('PortalIdentity collection', () => {
+  it.each([
+    [
+      'Staff',
+      {
+        authUserId: 'auth_staff_payload_1',
+        client: undefined,
+        createdAt: undefined,
+        staff: 10,
+        subjectType: 'staff',
+        updatedAt: undefined,
+      },
+      { authUserId: 'auth_staff_payload_1', staff: 10, subjectType: 'staff' },
+    ],
+    [
+      'Client',
+      {
+        authUserId: 'auth_client_payload_1',
+        client: 20,
+        createdAt: undefined,
+        staff: undefined,
+        subjectType: 'client',
+        updatedAt: undefined,
+      },
+      {
+        authUserId: 'auth_client_payload_1',
+        client: 20,
+        subjectType: 'client',
+      },
+    ],
+  ])(
+    'normalizes Payload 3.86.0 create-time %s relationship shape before strict validation',
+    (_label, data, expected) => {
+      expect(normalizePayloadPortalIdentityCreateData(data)).toEqual(expected);
+      expect(
+        enforcePortalIdentityInvariants({ data, operation: 'create' } as never),
+      ).toEqual(expected);
+    },
+  );
+
+  it.each([
+    {
+      authUserId: 'auth_extra_payload',
+      client: undefined,
+      createdAt: undefined,
+      staff: 10,
+      subjectType: 'staff',
+      updatedAt: undefined,
+      unexpected: true,
+    },
+    {
+      authUserId: 'auth_dual_payload',
+      client: 20,
+      createdAt: undefined,
+      staff: 10,
+      subjectType: 'staff',
+      updatedAt: undefined,
+    },
+    {
+      authUserId: 'auth_missing_payload',
+      client: undefined,
+      createdAt: undefined,
+      staff: undefined,
+      subjectType: 'staff',
+      updatedAt: undefined,
+    },
+    {
+      authUserId: 'auth_wrong_type_payload',
+      client: undefined,
+      createdAt: undefined,
+      staff: 10,
+      subjectType: 'client',
+      updatedAt: undefined,
+    },
+    {
+      authUserId: 'auth_forged_object_payload',
+      client: undefined,
+      createdAt: undefined,
+      staff: { id: 10 },
+      subjectType: 'staff',
+      updatedAt: undefined,
+    },
+    {
+      authUserId: 'auth_email_payload',
+      client: undefined,
+      createdAt: undefined,
+      staff: 'same@example.test',
+      subjectType: 'staff',
+      updatedAt: undefined,
+    },
+  ])('rejects malformed or forged Payload hook shape %#', (data) => {
+    expect(() =>
+      enforcePortalIdentityInvariants({ data, operation: 'create' } as never),
+    ).toThrow(PortalIdentityInvariantError);
+  });
+
+  it.each([
+    { createdAt: 'browser-invented' },
+    { updatedAt: 'browser-invented' },
+  ])('rejects a value-bearing framework-generated key', (timestamps) => {
+    expect(() =>
+      enforcePortalIdentityInvariants({
+        data: {
+          authUserId: 'auth_bad_timestamp_payload',
+          client: undefined,
+          createdAt: undefined,
+          staff: 10,
+          subjectType: 'staff',
+          updatedAt: undefined,
+          ...timestamps,
+        },
+        operation: 'create',
+      } as never),
+    ).toThrow(new PortalIdentityInvariantError('unexpected-field'));
+  });
+
   it.each([
     {
       authUserId: 'auth_staff_1',

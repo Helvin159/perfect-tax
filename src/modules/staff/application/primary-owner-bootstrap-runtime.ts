@@ -198,24 +198,71 @@ type PortalIdentityCreate = (
   }>,
 ) => Promise<unknown>;
 
+type StaffFindByID = (
+  options: Readonly<{
+    collection: CollectionSlug;
+    depth: 0;
+    id: StaffId;
+    overrideAccess: true;
+    req: PayloadRequest;
+    select: Readonly<{
+      id: true;
+      isPrimaryOwner: true;
+      role: true;
+      status: true;
+    }>;
+    showHiddenFields: true;
+  }>,
+) => Promise<unknown>;
+
 function relationshipId(value: unknown): unknown {
   return isRecord(value) ? value.id : value;
 }
 
-function parseCreatedPrimaryOwner(value: unknown): StaffId {
+function parseCreatedStaffId(value: unknown): StaffId {
   if (!isRecord(value)) {
     throw new PrimaryOwnerBootstrapError('BOOTSTRAP_FAILED');
   }
   const staffId = parseStaffId(value.id);
+  if (!staffId) throw new PrimaryOwnerBootstrapError('BOOTSTRAP_FAILED');
+  return staffId;
+}
+
+/**
+ * The Staff create response is intentionally a public-shaped projection and
+ * therefore omits the server-owned primary-owner marker. Bootstrap must prove
+ * the persisted state through this exact, transaction-bound internal read.
+ */
+async function verifyPersistedPrimaryOwner(
+  payload: Payload,
+  req: PayloadRequest,
+  staffId: StaffId,
+): Promise<void> {
+  const findByID = payload.findByID.bind(payload) as unknown as StaffFindByID;
+  const persisted = await findByID({
+    collection: STAFF_COLLECTION_SLUG as CollectionSlug,
+    depth: 0,
+    id: staffId,
+    overrideAccess: true,
+    req,
+    select: {
+      id: true,
+      isPrimaryOwner: true,
+      role: true,
+      status: true,
+    },
+    showHiddenFields: true,
+  });
+
   if (
-    !staffId ||
-    value.role !== 'owner' ||
-    value.status !== 'active' ||
-    value.isPrimaryOwner !== true
+    !isRecord(persisted) ||
+    parseStaffId(persisted.id) !== staffId ||
+    persisted.role !== 'owner' ||
+    persisted.status !== 'active' ||
+    persisted.isPrimaryOwner !== true
   ) {
     throw new PrimaryOwnerBootstrapError('BOOTSTRAP_FAILED');
   }
-  return staffId;
 }
 
 function assertCreatedPortalIdentity(
@@ -291,7 +338,8 @@ export async function preparePrimaryOwnerPersistence(
       overrideAccess: true,
       req,
     });
-    const staffId = parseCreatedPrimaryOwner(createdStaff);
+    const staffId = parseCreatedStaffId(createdStaff);
+    await verifyPersistedPrimaryOwner(payload, req, staffId);
 
     const createPortalIdentity = payload.create.bind(
       payload,

@@ -174,6 +174,7 @@ function createPersistencePayload(
   options: {
     existingOwner?: boolean;
     identityFailure?: Error;
+    persistedStaff?: unknown;
     staffFailure?: Error;
     transactionID?: null | string;
   } = {},
@@ -189,13 +190,21 @@ function createPersistencePayload(
   const count = vi.fn(async () => ({
     totalDocs: options.existingOwner ? 1 : 0,
   }));
+  const findByID = vi.fn(
+    async () =>
+      options.persistedStaff ?? {
+        id: 41,
+        isPrimaryOwner: true,
+        role: 'owner',
+        status: 'active',
+      },
+  );
   const create = vi.fn(async (request: Record<string, unknown>) => {
     requestLog.push(request);
     if (request.collection === 'staff') {
       if (options.staffFailure) throw options.staffFailure;
       return {
         id: 41,
-        isPrimaryOwner: true,
         role: 'owner',
         status: 'active',
       };
@@ -210,6 +219,7 @@ function createPersistencePayload(
   const payload = {
     count,
     create,
+    findByID,
     db: { beginTransaction, commitTransaction, rollbackTransaction },
   } as unknown as Payload;
 
@@ -218,6 +228,7 @@ function createPersistencePayload(
     commitTransaction,
     count,
     create,
+    findByID,
     payload,
     requestLog,
     rollbackTransaction,
@@ -274,6 +285,20 @@ describe('primary-owner application persistence transaction', () => {
       overrideAccess: true,
       req,
     });
+    expect(harness.findByID).toHaveBeenCalledWith({
+      collection: 'staff',
+      depth: 0,
+      id: 41,
+      overrideAccess: true,
+      req,
+      select: {
+        id: true,
+        isPrimaryOwner: true,
+        role: true,
+        status: true,
+      },
+      showHiddenFields: true,
+    });
     expect(JSON.stringify(harness.requestLog)).not.toContain(input.loginEmail);
     expect(JSON.stringify(harness.requestLog)).not.toContain(password);
     expect(JSON.stringify(harness.requestLog)).not.toMatch(/cms-users|mfa/iu);
@@ -310,6 +335,34 @@ describe('primary-owner application persistence transaction', () => {
       expect(JSON.stringify(error)).not.toContain(password);
       expect((error as Error).message).not.toContain(password);
       expect(harness.commitTransaction).not.toHaveBeenCalled();
+      expect(harness.rollbackTransaction).toHaveBeenCalledWith('tx-1');
+    },
+  );
+
+  it.each([
+    ['missing hidden marker', { id: 41, role: 'owner', status: 'active' }],
+    [
+      'false hidden marker',
+      { id: 41, isPrimaryOwner: false, role: 'owner', status: 'active' },
+    ],
+    [
+      'wrong persisted role',
+      { id: 41, isPrimaryOwner: true, role: 'administrator', status: 'active' },
+    ],
+    [
+      'wrong persisted status',
+      { id: 41, isPrimaryOwner: true, role: 'owner', status: 'disabled' },
+    ],
+  ])(
+    'fails closed when canonical persisted Owner state has %s',
+    async (_label, persistedStaff) => {
+      const harness = createPersistencePayload({ persistedStaff });
+
+      await expect(prepare(harness)).rejects.toMatchObject({
+        code: 'BOOTSTRAP_FAILED',
+      });
+      expect(harness.create).toHaveBeenCalledTimes(1);
+      expect(harness.findByID).toHaveBeenCalledOnce();
       expect(harness.rollbackTransaction).toHaveBeenCalledWith('tx-1');
     },
   );
