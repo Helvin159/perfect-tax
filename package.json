@@ -30,6 +30,10 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:integration:security": "vitest run --config vitest.integration.config.ts",
+    "test:integration:database": "vitest run --config vitest.integration.config.ts integration/database integration/bootstrap integration/readiness",
+    "test:security:regressions": "vitest run src/modules/authorization src/modules/auth src/modules/staff src/modules/clients src/modules/portal-identity src/modules/audit src/modules/database",
+    "test:security:gate": "pnpm test && pnpm test:integration:security",
     "test:watch": "vitest"
   },
   "dependencies": {

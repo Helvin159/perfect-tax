@@ -250,6 +250,10 @@ pnpm format
 pnpm format:check
 pnpm typecheck
 pnpm test
+pnpm test:integration:security
+pnpm test:integration:database
+pnpm test:security:regressions
+pnpm test:security:gate
 pnpm cms:migrate
 pnpm cms:bootstrap
 pnpm cms:generate:types
@@ -269,6 +273,16 @@ pnpm test
 CMS_TEST_DATABASE_URL=postgresql://client_services_portal:local-development-only@localhost:5432/client_services_portal_migration_test pnpm test
 pnpm build
 ```
+
+The Agent 15 security gate additionally requires a dedicated PostgreSQL 17 test
+cluster. Supply its administrator URL through `AGENT15_TEST_DATABASE_URL`; the
+database name must end in `_test`. The harness creates clean random databases,
+applies both migration systems twice, provisions production-like runtime roles,
+and destroys its fixtures. See
+[`integration/README.md`](integration/README.md) and the
+[`Agent 15 security review`](docs/reviews/agent-15-end-to-end-security-review.md).
+The gate remains intentionally red while the documented expected-success
+regressions A15-H01, A15-H02, and A15-M01 are unresolved.
 
 The `_test` suffix is mandatory for the clean-migration test, which drops and recreates only that disposable database. `pnpm build` does not run ESLint in Next.js 16, so lint remains a separate required gate.
 
