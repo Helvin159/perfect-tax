@@ -72,7 +72,7 @@ describe('Payload configuration', () => {
     });
   });
 
-  it('registers only the focused Task 5 public CMS objects', () => {
+  it('preserves public CMS objects and registers only approved Slice 1 private collections', () => {
     expect(config.globals.map(({ slug }) => slug)).toEqual([
       'business-identity',
       'contact-settings',
@@ -80,11 +80,35 @@ describe('Payload configuration', () => {
       'homepage-content',
     ]);
     expect(config.collections.map(({ slug }) => slug)).toEqual(
-      expect.arrayContaining(['cms-users', 'services', 'public-media']),
+      expect.arrayContaining([
+        'cms-users',
+        'services',
+        'public-media',
+        'staff',
+        'clients',
+        'portal-identities',
+        'security-events',
+      ]),
     );
     expect(config.collections.map(({ slug }) => slug)).not.toEqual(
       expect.arrayContaining(['documents', 'client-documents']),
     );
+  });
+
+  it('keeps operational collections separate from CMS authentication and navigation', () => {
+    for (const slug of [
+      'staff',
+      'clients',
+      'portal-identities',
+      'security-events',
+    ]) {
+      const collection = config.collections.find(
+        (entry) => entry.slug === slug,
+      );
+      expect(collection?.auth).toBe(false);
+      expect(collection?.admin.hidden).toBe(true);
+      expect(collection?.graphQL).toBe(false);
+    }
   });
 
   it('uses Payload drafts and versions for public content history', () => {

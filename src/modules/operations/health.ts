@@ -3,7 +3,10 @@ import 'server-only';
 import { Pool } from 'pg';
 
 import { getServerEnvironment } from '@/config/env/server';
+import { getPortalAuthEnvironment } from '@/modules/auth/config/environment';
+import { verifyPortalAuthMigrationLedger } from '@/modules/auth/migrations';
 import { REQUIRED_CMS_MIGRATIONS } from '@/modules/cms/required-migrations';
+import { verifyOperationalDatabaseContract } from '@/modules/database/operational-schema-verification';
 
 export type HealthStatus = 'ok' | 'ready' | 'unavailable';
 
@@ -59,14 +62,22 @@ async function withTimeout<T>(
   }
 }
 
-export async function checkPostgresReachable(databaseUrl: string) {
-  const pool = new Pool({
-    connectionString: databaseUrl,
+function createReadinessPool(connectionString: string) {
+  return new Pool({
+    connectionString,
     connectionTimeoutMillis: READINESS_TIMEOUT_MS,
     idleTimeoutMillis: 1_000,
     max: 1,
     query_timeout: READINESS_TIMEOUT_MS,
   });
+}
+
+export async function checkPostgresReachable(
+  databaseUrl: string,
+  portalAuthDatabaseUrl = getPortalAuthEnvironment().databaseURL,
+) {
+  const pool = createReadinessPool(databaseUrl);
+  const portalAuthPool = createReadinessPool(portalAuthDatabaseUrl);
 
   try {
     const result = await pool.query<{ name: string }>(
@@ -80,8 +91,14 @@ export async function checkPostgresReachable(databaseUrl: string) {
     if (!REQUIRED_CMS_MIGRATIONS.every((name) => applied.has(name))) {
       throw new Error('cms-schema-unavailable');
     }
+
+    await verifyOperationalDatabaseContract(pool);
+    await verifyPortalAuthMigrationLedger(portalAuthPool);
   } finally {
-    await pool.end().catch(() => undefined);
+    await Promise.all([
+      pool.end().catch(() => undefined),
+      portalAuthPool.end().catch(() => undefined),
+    ]);
   }
 }
 
@@ -93,9 +110,14 @@ export async function initializePayloadForReadiness() {
 
 export function createReadyCheckDependencies(): ReadyCheckDependencies {
   const environment = getServerEnvironment();
+  const portalAuthEnvironment = getPortalAuthEnvironment();
 
   return {
-    checkDatabase: () => checkPostgresReachable(environment.DATABASE_URL),
+    checkDatabase: () =>
+      checkPostgresReachable(
+        environment.DATABASE_URL,
+        portalAuthEnvironment.databaseURL,
+      ),
     initializePayload: initializePayloadForReadiness,
     log: logReadyCheckDiagnostic,
     timeoutMs: READINESS_TIMEOUT_MS,

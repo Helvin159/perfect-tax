@@ -1,6 +1,18 @@
 # Client Services Portal
 
-Reviewable Phase 1 foundation for a bilingual client-services portal. It includes the localized public site, allowlisted CMS projections, independently authenticated Payload administration, PostgreSQL migrations, public contact actions, metadata/PWA foundations, health endpoints, and focused security tests. Portal authentication and sensitive client workflows are intentionally absent.
+Reviewable foundation for a bilingual client-services portal. It includes the
+localized public site, allowlisted CMS projections, independently authenticated
+Payload administration, the reviewed Better Auth/session boundary, PostgreSQL
+migrations, public contact actions, metadata/PWA foundations, health endpoints,
+and focused security tests. Production portal authentication and sensitive
+client workflows remain intentionally deferred.
+
+The current Slice 1 security architecture and operator procedures are
+[documented here](docs/architecture/portal-identity-authorization.md), with
+[bootstrap](docs/operations/primary-owner-bootstrap.md),
+[deployment](docs/operations/database-migrations-and-deployment.md), and
+[security validation](docs/operations/security-validation.md) runbooks. These
+documents supersede older agent handoffs when they conflict.
 
 ## Prerequisites
 
@@ -47,6 +59,14 @@ docker compose ps
 ```
 
 `postgres` should report `healthy`. The service binds only to `127.0.0.1`, and data persists in the Compose-managed `postgres_data` named volume.
+
+For architecture-parity local runs, use the Compose database user only as the
+provisioning administrator, then run
+`psql --file scripts/database/provision-roles.sql` with the four role variables
+and point `DATABASE_URL` at `perfect_tax_payload_runtime` and
+`PORTAL_AUTH_DATABASE_URL` at `perfect_tax_auth_runtime`. Apply the migration
+and grant commands in the Migrations section before starting the application.
+The disposable integration test performs this setup automatically.
 
 Inspect logs, open `psql`, or print the server version:
 
@@ -128,7 +148,14 @@ Use the email and password entered through the hidden bootstrap prompts. The com
 
 ### Migrations
 
-PostgreSQL schema push is disabled. The committed migration in `src/modules/cms/migrations` is the schema source of truth. Generate a migration only after an intentional Payload schema change, review both the TypeScript and JSON snapshot, and commit the generated migration and `index.ts` together:
+PostgreSQL schema push is disabled. The committed Payload migrations in
+`src/modules/cms/migrations` are the schema source of truth for both CMS and
+Slice 1 operational tables. The current operational migration is
+`20260831_171654_agent_14_operational_schema`; it owns `staff`, `clients`,
+`portal_identities`, and `security_events` in the existing `public` schema.
+Generate a migration only after an intentional Payload schema change, review
+both the TypeScript and JSON snapshot, and commit the generated migration and
+`index.ts` together:
 
 ```sh
 pnpm cms:migrate:create descriptive_name
@@ -138,13 +165,29 @@ pnpm cms:generate:importmap
 
 Apply migrations explicitly with `pnpm cms:migrate` before starting a new application release. Production startup does not auto-migrate; production changes require a backup, reviewed migration, one-off migration job, and rollback plan.
 
+Better Auth has an independent `portal_auth` schema and ledger. Its reviewed
+`1.6.23` core/MFA SQL is applied with `PORTAL_AUTH_DATABASE_URL` and
+`pnpm auth:migrate`; it never runs through Payload and is never registered as a
+Payload collection. Production provisions the dedicated migration/runtime roles
+and applies `scripts/database/apply-payload-runtime-grants.sql` and
+`scripts/database/apply-auth-runtime-grants.sql` only after the corresponding
+migrations complete. Run `scripts/database/provision-roles.sql` once as a
+database administrator during database provisioning. See
+[ADR 0010](docs/adr/0010-better-auth-compatibility-and-boundary.md) for the
+ownership matrix, deployment ordering, and rollback policy.
+
 The clean-database integration test is opt-in because it requires PostgreSQL and drops/recreates its target. It refuses any database name that does not end in `_test`. The Compose database user may create the disposable database:
 
 ```sh
 CMS_TEST_DATABASE_URL=postgresql://client_services_portal:local-development-only@localhost:5432/client_services_portal_migration_test pnpm test
 ```
 
-Without `CMS_TEST_DATABASE_URL`, normal unit tests skip only this PostgreSQL integration case. With it, the test creates a clean database, applies the committed migrations twice, verifies the CMS-user and Task 5 public-content tables plus two migration-ledger entries, and removes the database.
+Without `CMS_TEST_DATABASE_URL`, normal unit tests skip only the PostgreSQL
+integration cases. With it, the test creates a clean database, applies the
+Payload and Better Auth migrations twice, verifies the CMS/public and
+operational tables, both migration ledgers, ownership/grants, immutable
+bindings, append-only events, transaction rollback, and advisory-lock
+serialization, then removes the database.
 
 ## Public CMS Content and Translation Workflow
 
@@ -214,6 +257,10 @@ pnpm format
 pnpm format:check
 pnpm typecheck
 pnpm test
+pnpm test:integration:security
+pnpm test:integration:database
+pnpm test:security:regressions
+pnpm test:security:gate
 pnpm cms:migrate
 pnpm cms:bootstrap
 pnpm cms:generate:types
@@ -233,6 +280,16 @@ pnpm test
 CMS_TEST_DATABASE_URL=postgresql://client_services_portal:local-development-only@localhost:5432/client_services_portal_migration_test pnpm test
 pnpm build
 ```
+
+The Agent 15 security gate additionally requires a dedicated PostgreSQL 17 test
+cluster. Supply its administrator URL through `AGENT15_TEST_DATABASE_URL`; the
+database name must end in `_test`. The harness creates clean random databases,
+applies both migration systems twice, provisions production-like runtime roles,
+and destroys its fixtures. See
+[`integration/README.md`](integration/README.md) and the
+[`Agent 15 security review`](docs/reviews/agent-15-end-to-end-security-review.md).
+The maintained regressions explicitly re-prove the repaired A15-H01, A15-H02,
+and A15-M01 boundaries against real Payload and PostgreSQL runtimes.
 
 The `_test` suffix is mandatory for the clean-migration test, which drops and recreates only that disposable database. `pnpm build` does not run ESLint in Next.js 16, so lint remains a separate required gate.
 
@@ -279,17 +336,37 @@ Verified on 2026-07-18 using official project documentation and npm registry pac
 
 ## Current Scope
 
-Phase 1 Tasks 1-11 are represented in the scaffold. Public pages consume only versioned allowlisted DTOs through server-only repositories. Payload drafts, workflow eligibility, locale-aware cache keys, publication hooks, direct contact fallbacks, localized metadata, the manifest, placeholder routes, and minimal health behavior are implemented and tested. The sign-in and portal routes explicitly do not accept credentials or provide account access.
+Phase 1 Tasks 1-11 and the reviewed Agent 3-14 identity foundation are
+represented in the scaffold. Public pages consume only versioned allowlisted
+DTOs through server-only repositories. Payload drafts, workflow eligibility,
+locale-aware cache keys, publication hooks, direct contact fallbacks, localized
+metadata, the manifest, placeholder portal pages, the constrained Better Auth
+HTTP surface, and health behavior are implemented and tested. The public
+sign-in and portal pages remain placeholders; no client workflow is enabled.
 
 The consolidated Phase 1 decisions are recorded in [`docs/adr/0011-phase-1-foundation-boundaries.md`](docs/adr/0011-phase-1-foundation-boundaries.md). The Better Auth compatibility spike and Phase 2 entry criteria are recorded separately in [`docs/adr/0010-better-auth-compatibility-and-boundary.md`](docs/adr/0010-better-auth-compatibility-and-boundary.md).
 
 ## Deferred Features
 
-Production portal authentication, client registration, MFA, private document uploads, tax-return processing, immigration form generation, payments, scheduling, contact forms, client messaging, staff assignment, case automation, notifications, analytics, offline/service-worker behavior, and portal-to-CMS identity linking are deferred. Better Auth has no Phase 1 package, route, environment variable, schema, session, or runtime code.
+Production portal launch, client registration, private document uploads,
+tax-return processing, immigration form generation, payments, scheduling,
+contact forms, client messaging, staff assignment, case automation,
+notifications, analytics, offline/service-worker behavior, and portal-to-CMS
+identity linking are deferred. Better Auth's reviewed core/MFA runtime and
+isolated `portal_auth` schema are present, but production enablement still
+requires the ADR 0010 entry criteria, operational ownership, and Agent 15
+end-to-end security review.
 
 ## Security Limitations
 
-Phase 1 is a public-site and CMS scaffold, not a production security certification. Payload CMS credentials are a narrow administrative boundary and are separate from future portal identities. CMS password recovery and MFA are not implemented; access therefore requires a named operator procedure. Public media is locally stored and intentionally public after publication. No private storage, malware scanning, retention enforcement, audit trail for client records, distributed rate limiting, production email, or authenticated portal authorization exists.
+This remains a public-site/CMS foundation, not a production security
+certification. Payload CMS credentials are a narrow administrative boundary and
+are separate from portal identities. Better Auth sessions and MFA are isolated
+behind the reviewed server-only boundary, but complete portal resource
+authorization, private storage, malware scanning, retention enforcement,
+distributed rate limiting, production email, and client-workflow audit remain
+future launch requirements. Public media is locally stored and intentionally
+public after publication.
 
 The locale cookie is a non-sensitive preference. Public contact actions hand users to telephone, email, or WhatsApp and cannot prevent a user from sending sensitive data after leaving the site; approved bilingual warnings and business handling procedures remain required. Health logs contain only fixed diagnostic codes, but production log access, retention, and alerting still require an operational policy.
 

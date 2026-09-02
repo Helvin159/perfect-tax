@@ -1,5 +1,10 @@
 # ADR 0011: Phase 1 Foundation Boundaries
 
+> **Historical scope notice (2026-09-02):** This ADR records the Phase 1 public
+> foundation. Its statements that Better Auth and portal identity are absent are
+> superseded for Slice 1 by ADR 0012. It remains authoritative only for the
+> Phase 1 public/CMS decisions that ADR 0012 does not replace.
+
 - Status: Accepted
 - Date: 2026-07-18
 - Scope: Phase 1 Tasks 1-11
@@ -85,3 +90,22 @@ Portal launch additionally requires every ADR 0010 Phase 2 entry criterion. Priv
 - [Payload drafts](https://payloadcms.com/docs/versions/drafts)
 - [PostgreSQL versioning policy](https://www.postgresql.org/support/versioning/)
 - [next-intl App Router setup](https://next-intl.dev/docs/getting-started/app-router)
+
+## Amendment — 2026-08-31
+
+The historical Phase 1 wording above predates the accepted Agent 3–13
+identity foundation. Better Auth `1.6.23`, its server-only session/MFA boundary,
+and the allowlisted `/api/auth` handler are now present in the repository, but
+production portal launch remains deferred until the ADR 0010 entry criteria,
+operator ownership, and Agent 15 end-to-end review are complete. The public
+sign-in page remains an availability placeholder and no client workflow is
+enabled.
+
+Agent 14 owns the physical migration foundation. Better Auth core/MFA tables
+are applied by the independent `portal_auth` migration ledger and roles. Staff,
+Clients, PortalIdentity, and SecurityEvents are Payload collections in the
+existing `public` schema and are applied by the Payload migration ledger; they
+are not duplicated in a `portal_identity` schema. ADR 0010's 2026-08-31
+implementation matrix and deployment/grant policy are authoritative for this
+split. CMS Admin identity remains `cms-users` and is never equivalent to a
+portal principal.

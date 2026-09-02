@@ -42,7 +42,11 @@ postgresTest(
       const migrationEnvironment = {
         ...process.env,
         DATABASE_URL: testDatabaseUrl!,
+        EMAIL_ADDRESS: 'migration-test@example.test',
+        EMAIL_NAME: 'Perfect Tax',
+        EMAIL_PASSWORD: 'migration-test-only',
         PAYLOAD_SECRET: 'migration-test-secret-only-0123456789abcdef',
+        SITE_URL: 'http://localhost:3000',
       };
 
       await execFileAsync('pnpm', ['cms:migrate'], {
@@ -66,13 +70,17 @@ postgresTest(
            WHERE table_schema = 'public'
               AND table_name IN (
                 'business_identity',
+                'clients',
                 'cms_users',
                 'contact_settings',
                 'homepage_content',
                 'payload_migrations',
                 'portal_settings',
                 'public_media',
-                'services'
+                'security_events',
+                'services',
+                'staff',
+                'portal_identities'
               )
             ORDER BY table_name`,
         );
@@ -82,13 +90,17 @@ postgresTest(
 
         expect(tables.rows.map(({ table_name }) => table_name)).toEqual([
           'business_identity',
+          'clients',
           'cms_users',
           'contact_settings',
           'homepage_content',
           'payload_migrations',
+          'portal_identities',
           'portal_settings',
           'public_media',
+          'security_events',
           'services',
+          'staff',
         ]);
         expect(appliedMigrations.rows.map(({ name }) => name)).toEqual(
           REQUIRED_CMS_MIGRATIONS,
