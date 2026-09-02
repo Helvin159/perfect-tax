@@ -68,9 +68,29 @@ describe('migration-owned readiness', () => {
       [AUTH_MIGRATION],
     );
 
+    try {
+      await expect(
+        checkPostgresReachable(database.payloadRuntimeURL),
+        'A15-M01 regression: readiness must verify the independent Better Auth ledger',
+      ).rejects.toThrow('auth-schema-unavailable');
+    } finally {
+      await authMigration.query(
+        `UPDATE portal_auth.perfect_tax_auth_migrations
+            SET name = $1
+          WHERE name = $2`,
+        [AUTH_MIGRATION, `${AUTH_MIGRATION}_missing`],
+      );
+    }
+  });
+
+  it('fails closed within the bounded check when portal_auth is unavailable', async () => {
+    const startedAt = Date.now();
     await expect(
-      checkPostgresReachable(database.payloadRuntimeURL),
-      'MEDIUM A15-M01: readiness checks only the Payload ledger and operational schema',
+      checkPostgresReachable(
+        database.payloadRuntimeURL,
+        'postgresql://unavailable:unavailable@127.0.0.1:1/unavailable',
+      ),
     ).rejects.toThrow();
+    expect(Date.now() - startedAt).toBeLessThan(3_000);
   });
 });

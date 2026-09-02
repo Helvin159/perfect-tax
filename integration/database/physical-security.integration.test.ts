@@ -327,4 +327,48 @@ describe('Agent 15 PostgreSQL security integration', () => {
     expect(columnNames).not.toContain('secret');
     expect(columnNames).not.toContain('backupcodes');
   });
+
+  it('rolls back application transactions and enforces database advisory locks', async () => {
+    await payloadRuntime.query('BEGIN');
+    await payloadRuntime.query(
+      `INSERT INTO public.staff
+         (first_name, last_name, work_email, role, status, is_primary_owner)
+       VALUES ('Rolled', 'Back', 'rolled-back@example.test', 'intake', 'active', false)`,
+    );
+    await payloadRuntime.query('ROLLBACK');
+    const rolledBack = await payloadRuntime.query<{ count: string }>(
+      `SELECT count(*)::text AS count
+         FROM public.staff
+        WHERE work_email = 'rolled-back@example.test'`,
+    );
+    expect(rolledBack.rows[0]?.count).toBe('0');
+
+    const competitor = new Client({
+      connectionString: database.payloadMigrationURL,
+    });
+    await competitor.connect();
+    try {
+      await payloadMigration.query(
+        'SELECT pg_advisory_lock($1)',
+        [1_617_731_881],
+      );
+      const blocked = await competitor.query<{ acquired: boolean }>(
+        'SELECT pg_try_advisory_lock($1) AS acquired',
+        [1_617_731_881],
+      );
+      expect(blocked.rows[0]?.acquired).toBe(false);
+      await payloadMigration.query(
+        'SELECT pg_advisory_unlock($1)',
+        [1_617_731_881],
+      );
+      const acquired = await competitor.query<{ acquired: boolean }>(
+        'SELECT pg_try_advisory_lock($1) AS acquired',
+        [1_617_731_881],
+      );
+      expect(acquired.rows[0]?.acquired).toBe(true);
+      await competitor.query('SELECT pg_advisory_unlock($1)', [1_617_731_881]);
+    } finally {
+      await competitor.end();
+    }
+  });
 });

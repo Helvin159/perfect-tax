@@ -1,7 +1,17 @@
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { runPrimaryOwnerBootstrap } from '../support/auth';
+import {
+  AGENT15_OWNER_PASSWORD,
+  closePortalAuthRuntime,
+  createPortalAuthHandler,
+  enrollAndVerifyMfa,
+  login,
+  portalAuthRequest,
+  quiescePostgresPool,
+  responseCookie,
+  runPrimaryOwnerBootstrap,
+} from '../support/auth';
 import {
   activateAgent15Environment,
   createAgent15Database,
@@ -82,8 +92,8 @@ describe('real primary-owner bootstrap', () => {
       failure,
       'HIGH A15-H01: real bootstrap rolls back after Staff creation and before PortalIdentity creation',
     ).toBeUndefined();
-    expect(result?.stdout).toBe(
-      'Primary owner created. Sign in normally to enroll MFA.\n',
+    expect(result?.stdout.trimEnd()).toMatch(
+      /(?:^|\n)Primary owner created\. Sign in normally to enroll MFA\.$/,
     );
     await expect(persistedState()).resolves.toEqual({
       accounts: '1',
@@ -94,5 +104,98 @@ describe('real primary-owner bootstrap', () => {
       staff: '1',
       users: '1',
     });
+
+    const initialAssurance = await authMigration.query<{
+      enabled: boolean | null;
+      factors: string;
+    }>(`SELECT
+          (SELECT "twoFactorEnabled" FROM portal_auth."user" LIMIT 1) AS enabled,
+          (SELECT count(*)::text FROM portal_auth."twoFactor") AS factors`);
+    expect(initialAssurance.rows[0]).toEqual({ enabled: false, factors: '0' });
+
+    for (const overrides of [
+      {},
+      { PRIMARY_OWNER_BOOTSTRAP_LOGIN_EMAIL: 'different-login@example.test' },
+      { PRIMARY_OWNER_BOOTSTRAP_FIRST_NAME: 'Different' },
+      {
+        PRIMARY_OWNER_BOOTSTRAP_FIRST_NAME: 'Different',
+        PRIMARY_OWNER_BOOTSTRAP_LAST_NAME: 'Person',
+        PRIMARY_OWNER_BOOTSTRAP_LOGIN_EMAIL: 'another-login@example.test',
+        PRIMARY_OWNER_BOOTSTRAP_WORK_EMAIL: 'another-work@example.test',
+      },
+    ]) {
+      await expect(
+        runPrimaryOwnerBootstrap(database, overrides),
+      ).rejects.toBeDefined();
+    }
+
+    await expect(persistedState()).resolves.toMatchObject({
+      accounts: '1',
+      identities: '1',
+      owners: '1',
+      staff: '1',
+      users: '1',
+    });
+    const audit = await payloadMigration.query<{
+      action: string;
+      metadata: Record<string, unknown>;
+    }>('SELECT action::text, metadata FROM public.security_events ORDER BY id');
+    expect(audit.rows.map(({ action }) => action)).toEqual([
+      'primary-owner.bootstrap.succeeded',
+      'primary-owner.bootstrap.failed',
+      'primary-owner.bootstrap.failed',
+      'primary-owner.bootstrap.failed',
+      'primary-owner.bootstrap.failed',
+    ]);
+    expect(JSON.stringify(audit.rows).toLowerCase()).not.toMatch(
+      /password|session.?token|totp|backup.?code|capability|raw.?request|agent15-owner-password/,
+    );
+
+    const handler = await createPortalAuthHandler();
+    const signIn = await login(
+      handler,
+      'owner-login@example.test',
+      AGENT15_OWNER_PASSWORD,
+    );
+    expect(signIn.status).toBe(200);
+    const cookie = responseCookie(signIn, 'session_token');
+    const principalModule =
+      await import('@/modules/auth/portal-principal-composition');
+    await expect(
+      principalModule.resolveCanonicalPortalPrincipalFromSession(
+        new Headers({ cookie }),
+      ),
+    ).resolves.toMatchObject({
+      outcome: 'enrollment-only',
+      principal: { kind: 'staff-enrollment' },
+    });
+
+    const assurance = await enrollAndVerifyMfa(
+      handler,
+      cookie,
+      AGENT15_OWNER_PASSWORD,
+    );
+    await expect(
+      principalModule.resolveCanonicalPortalPrincipalFromSession(
+        new Headers({ cookie: assurance.cookie }),
+      ),
+    ).resolves.toMatchObject({
+      outcome: 'authorized',
+      principal: { kind: 'staff', role: 'owner' },
+    });
+    await handler(portalAuthRequest('/sign-out', {}, assurance.cookie));
+
+    const [{ getPayload }, { default: config }] = await Promise.all([
+      import('payload'),
+      import('@payload-config'),
+    ]);
+    const runtimePayload = await getPayload({ config });
+    const pool = (runtimePayload as unknown as { db?: { pool?: unknown } }).db
+      ?.pool;
+    const payloadClosed = quiescePostgresPool(pool).catch(() => undefined);
+    const authClosed = closePortalAuthRuntime().catch(() => undefined);
+    void payloadClosed;
+    void authClosed;
+    await runtimePayload.destroy();
   });
 });

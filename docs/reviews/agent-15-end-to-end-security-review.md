@@ -2,154 +2,98 @@
 
 ## Verdict
 
-**BLOCKED.** The accepted system cannot complete primary-owner bootstrap, the
-registered PortalIdentity collection rejects an approved real create, and
-readiness does not fail when the Better Auth migration ledger is absent.
+**COMPLETE.** The maintained integration gate dynamically proves the required
+real authentication, canonical identity, attestation, authorization, Payload,
+and PostgreSQL chain. The repaired A15-H01, A15-H02, and A15-M01 regressions are
+green.
 
-The first two defects are High severity and block Slice 1 completion. The
-integration tests deliberately retain expected-success assertions so an
-upstream repair, rather than a weakened expectation, is required to make the
-security gate green.
+## Environment
 
-## Architecture exercised
+- Node.js 24.18.0 and pnpm 10.33.0
+- Payload 3.86.0 and Better Auth 1.6.23
+- isolated PostgreSQL 17.10 container
+- committed Payload and Better Auth migrations; no schema push
+- one worker because the reviewed database role names are cluster-global
 
-The maintained suite dynamically exercises:
+## Complete chain
 
-```text
-Better Auth credential/session
-→ trusted session reader
-→ canonical PortalIdentity + Staff resolution
-→ MFA assurance
-→ private request attestation
-→ authorization policy
-→ registered private Client access
-→ PostgreSQL runtime grants and constraints
-```
+`integration/auth/staff-principal.integration.test.ts` provisions real Better
+Auth credentials and sessions in `portal_auth`, binds the canonical AuthUserId
+to real Staff through PortalIdentity, completes real TOTP, invokes Agent 11's
+production principal composition and Agent 10's private gateway, reaches Agent
+8 policy and the registered Clients access function with
+`overrideAccess:false`, calls Payload Local API, and reads PostgreSQL-backed
+Client rows. Instrumentation observes the registered access function and the
+fixed `depth:0`/narrow selection at runtime.
 
-Because primary-owner bootstrap is blocked, the downstream authentication test
-uses explicitly migration-owned Staff and PortalIdentity fixtures. It still
-uses real Better Auth credentials/sessions, real TOTP, real Payload, registered
-access controls, Agent 11 principal resolution, Agent 10 attestation, Agent 8
-policy, and PostgreSQL. This distinction prevents a bootstrap failure from
-hiding downstream evidence without treating the fixture as bootstrap proof.
+## Bootstrap and repair evidence
+
+- A15-H01: the real primary-owner CLI creates one credential/account, one
+  active primary Owner, one PortalIdentity, and one success SecurityEvent.
+- A15-H02: approved Staff and Client PortalIdentity creates pass through real
+  Payload normalization; malformed, duplicate, update, and delete attacks fail.
+- A15-M01: readiness passes only when both independent ledgers are current and
+  fails for a missing Payload migration, missing Better Auth ledger entry, or
+  unavailable `portal_auth`.
+- A newly bootstrapped Owner resolves enrollment-only before TOTP and as an
+  operational canonical Owner after TOTP.
+- Four repeated bootstrap permutations fail without adding credentials,
+  identities, Staff, or Owners; failure events contain no prohibited secrets.
+- Two concurrent real CLI processes yield one success, one failure, one Owner,
+  one binding, and one effective credential authority.
+- Real credential, Staff, PortalIdentity, and mandatory-success-audit failures
+  leave no incomplete privileged authority. The first three persist the
+  approved failure event; a failed mandatory success append rolls back its
+  transaction and does not attempt a misleading second terminal event.
 
 ## Security invariant matrix
 
-`NOT TESTABLE` is never treated as `PASS`.
+| Invariant                                                | Result       | Evidence                                                             |
+| -------------------------------------------------------- | ------------ | -------------------------------------------------------------------- |
+| Complete real auth-to-database chain                     | PASS         | `integration/auth/staff-principal.integration.test.ts`               |
+| Independent idempotent migrations                        | PASS         | `integration/database/physical-security.integration.test.ts`         |
+| All four Staff roles require MFA                         | PASS         | real credentials, sessions, and TOTP in auth integration             |
+| Eight-hour lifetime and 15-minute freshness              | PASS         | persisted session clocks before and after enrollment                 |
+| Expired, revoked, and signed-out sessions deny           | PASS         | real `portal_auth.session` mutations and sign-out                    |
+| Disabled Staff re-evaluates and denies                   | PASS         | canonical Staff mutation followed by top-level resolution            |
+| Browser/provider/request role injection                  | PASS         | canonical Intake remains Intake                                      |
+| Shape, serialization, copying, or freezing creates trust | PASS         | forged values rejected by final gateway                              |
+| Capability/request and user binding                      | PASS         | copied, mismatched, and completed request contexts deny              |
+| Generic resolver/system-capability attack                | PASS         | private issuers unavailable plus focused security regressions        |
+| Registered access executes with override disabled        | PASS         | runtime instrumentation around real Payload collection access        |
+| Fixed depth and narrow projection                        | PASS         | observed Local API arguments and returned Client fields              |
+| CMS users can access private portal collections          | PASS         | all four CMS roles denied REST/Admin private data                    |
+| Private REST and GraphQL exposure                        | PASS         | GET/POST/PATCH/DELETE denied; GraphQL unavailable                    |
+| CMS/portal matching email crossover                      | PASS         | real separate credentials confer no cross-authority                  |
+| First and repeated primary-owner bootstrap               | PASS         | real CLI and exact final database state                              |
+| Concurrent primary-owner bootstrap                       | PASS         | two real CLI processes and final database state                      |
+| Bootstrap compensation and audit secrecy                 | PASS         | post-readiness fault injection and recursive metadata checks         |
+| PortalIdentity repaired Local API create                 | PASS         | approved Staff and Client relationships persist                      |
+| PortalIdentity malformed/duplicate/immutable boundaries  | PASS         | Payload plus PostgreSQL attacks                                      |
+| Payload and Better Auth readiness                        | PASS         | current/missing/unavailable scenarios                                |
+| Staff/Client/PortalIdentity physical constraints         | PASS         | real PostgreSQL constraint failures                                  |
+| SecurityEvents append-only                               | PASS         | application hooks and runtime role DML/DDL denial                    |
+| Runtime/migration and cross-schema separation            | PASS         | four-role PostgreSQL checks                                          |
+| Transaction rollback and advisory locking                | PASS         | real rollback, lock contention, and bootstrap concurrency            |
+| Public EN/ES, media, globals, manifests, CMS auth        | PASS         | running Next/Payload HTTP suite                                      |
+| Production Client credential flow                        | NOT TESTABLE | intentionally fail-closed in Slice 1; no signup invented             |
+| Nested Payload gateway operation propagation             | NOT TESTABLE | no current production Client gateway operation invokes a nested hook |
 
-| Invariant                                                  | Result       | Evidence                                                                                                                             |
-| ---------------------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Clean migrations and application/auth schemas              | PASS         | `database/physical-security`: empty random database, both migration commands twice, both ledgers                                     |
-| CMS/portal identity separation                             | PASS         | `cms-isolation/http-boundaries`: all four CMS roles denied private surfaces; operational cookie denied CMS authority                 |
-| Email-independent portal identity                          | PASS         | `auth/staff-principal` and CMS crossover account                                                                                     |
-| Provider/request role cannot grant Owner                   | PASS         | canonical Intake remains Intake despite injected Owner claims                                                                        |
-| Staff status is re-evaluated                               | PASS         | valid MFA session denied after canonical Staff is disabled                                                                           |
-| Expired/revoked sessions fail closed                       | PASS         | direct real-session expiry/deletion and post-sign-out gateway denial                                                                 |
-| MFA mandatory for every Staff role                         | PASS         | Owner, Administrator, Case Worker, and Intake resolve enrollment-only before TOTP                                                    |
-| Owner has no MFA bypass                                    | PASS         | real Owner credential/session is enrollment-only before TOTP                                                                         |
-| 8-hour lifetime and 15-minute freshness remain distinct    | PASS         | aged and near-deadline sessions retain original clocks; genuinely new login gets a new epoch                                         |
-| Runtime shape is not trust                                 | PASS         | real, parsed, frozen, serialized, reconstructed, fake Staff/Admin/Client values denied by final gateway                              |
-| Capability/request binding and isolation                   | PASS         | copied request, changed user, fake context, and reused completed requests denied; top-level requests/DataLoaders differ              |
-| Generic resolver cannot issue authority                    | PASS         | production composers/issuers are not exported; fake resolver-shaped input cannot reach either boundary                               |
-| Portal/system capability namespaces are separate           | PASS         | fake/cross-shaped contexts fail and neither private issuer is exportable                                                             |
-| `overrideAccess: false` reaches registered access          | PASS         | delegated real `payload.find` instrumentation observes the Client access function                                                    |
-| `depth: 0` is fixed                                        | PASS         | final gateway call arguments are observed dynamically; callers have no depth input                                                   |
-| Narrow Client projection                                   | PASS         | actual returned objects contain only client number, first/last name, and status                                                      |
-| Nested operation propagation                               | NOT TESTABLE | no current production Client gateway operation invokes an existing nested Payload hook/operation                                     |
-| Private REST/Admin/GraphQL denial                          | PASS         | anonymous, all CMS roles, and fake portal-shaped HTTP actors cannot access all four private slugs; GraphQL unavailable               |
-| Owner/Administrator ordinary read policy                   | PASS         | canonical attested Owner and Administrator can list approved Client summaries                                                        |
-| Owner/Administrator protected Staff mutations              | PASS         | no production gateway exposes them; policy regressions plus physical primary-owner constraints deny protected state changes          |
-| Case Worker without assignment evidence                    | PASS         | real canonical Case Worker receives `assignment-required` from the final gateway                                                     |
-| Intake field restrictions                                  | PASS         | only the fixed basic projection is returned; no Client mutation gateway exists and direct private REST is denied                     |
-| Arbitrary Better Auth account becomes Client               | PASS         | unbound and even test-bound Client credentials resolve denied in production composition                                              |
-| Client own-versus-other allow path                         | NOT TESTABLE | production Client principal issuance is intentionally fail-closed in Slice 1                                                         |
-| PortalIdentity uniqueness/shape/immutability in PostgreSQL | PASS         | duplicate auth/Staff/Client, zero/dual/mismatch, update, and delete attacks rejected                                                 |
-| Real PortalIdentity Payload create                         | FAIL         | A15-H02: approved three-field Staff binding throws `unexpected-field`                                                                |
-| Staff role/status/one-owner physical constraints           | PASS         | invalid enums and second owner rejected; demote/disable/unmark/delete primary owner rejected                                         |
-| Client number uniqueness/immutability/status/retry         | PASS         | physical index collision and actual Agent 5 retry against `clients_client_number_idx`                                                |
-| SecurityEvents append-only                                 | PASS         | Agent 7 recorder succeeds; Local API and runtime-role UPDATE/DELETE/TRUNCATE/direct INSERT fail                                      |
-| SecurityEvent secret safety                                | PASS         | persisted authentication, authorization, and MFA metadata recursively inspected; prohibited injection rejected                       |
-| First primary-owner bootstrap                              | FAIL         | A15-H01: production CLI rolls back and reports failure                                                                               |
-| Bootstrap fail-closed residual state                       | PASS         | failed real run leaves zero credentials, sessions, Staff, Owners, and identities; one mandatory failure event remains                |
-| Second/concurrent bootstrap and post-bootstrap MFA         | NOT TESTABLE | first successful bootstrap is impossible under A15-H01                                                                               |
-| Bootstrap partial-failure matrix                           | NOT TESTABLE | actual Staff-stage failure/compensation is proven; later stage injection would not prove success-path behavior while A15-H01 remains |
-| Database runtime role separation                           | PASS         | both runtime roles lack DDL and cross-schema access; migration roles cannot cross schema ownership                                   |
-| Better Auth/Payload persistence separation                 | PASS         | schema/grant tests and application-column inspection; no credential/session/MFA columns in operational tables                        |
-| Migration ledger ownership separation                      | PASS         | independent exact Payload and Better Auth ledger contents on a clean database                                                        |
-| Fully migrated and missing Payload migration readiness     | PASS         | ready against full state; missing required Payload ledger entry fails closed                                                         |
-| Missing Better Auth migration readiness                    | FAIL         | A15-M01: readiness still returns success with the Better Auth ledger entry absent                                                    |
-| Public EN/ES, globals, media, metadata/manifests           | PASS         | real Next server responses and existing full unit regressions                                                                        |
-| CMS editorial role regression                              | PASS         | every role authenticates/reads; Editor create remains allowed and reviewer/publisher create remains denied                           |
-| Error/record enumeration safety                            | PASS         | private responses contain no seeded identifiers; endpoints disclose no private record contents                                       |
+## Validation
 
-## Findings
+- `pnpm lint`: pass
+- `pnpm typecheck`: pass
+- `pnpm test`: 60 files passed, 2 environment-gated migration files skipped;
+  547 tests passed, 2 skipped
+- `pnpm test:security:regressions`: 31 files and 402 tests passed
+- `pnpm test:integration:security`: 9 files and 20 tests passed
+- `pnpm test:integration:database`: 5 files and 13 tests passed
+- real CMS clean/upgrade migration run: 2 files and 2 tests passed
+- HTTPS-configured `next build --webpack`: pass
+- `git diff --check`: pass
+- Agent 15 file formatting: pass
 
-### A15-H01 — High — primary-owner bootstrap cannot succeed
-
-- **Affected module:** Agent 12 bootstrap composition with Agent 4 Staff field
-  access.
-- **Root cause:** `preparePrimaryOwnerPersistence` creates Staff through real
-  Payload and `parseCreatedPrimaryOwner` then requires
-  `value.isPrimaryOwner === true`. The registered Staff field denies read access,
-  so the real returned document omits the hidden marker. The mock unit fixture
-  included it and did not expose this composition failure.
-- **Impact:** the only supported system path cannot provision the first Owner.
-  Slice 1 has no operational primary owner.
-- **Observed persistent state:** the Staff transaction rolls back; Better Auth
-  credential compensation removes user/account; no identity or session exists;
-  one mandatory `primary-owner.bootstrap.failed` event persists.
-- **Repair owner:** Agent 12 bootstrap runtime, coordinated with Agent 4 Staff
-  collection semantics.
-- **Required fix:** validate the canonical persisted primary-owner state through
-  an approved internal persistence result/query without exposing or weakening
-  the hidden marker. Do not remove the marker invariant or broaden field read
-  access.
-- **Regression:**
-  `integration/bootstrap/primary-owner-bootstrap.integration.test.ts`.
-
-### A15-H02 — High — registered PortalIdentity create rejects approved input
-
-- **Affected module:** Agent 6 PortalIdentity collection integrated by Agent 13.
-- **Root cause:** the collection-level `beforeValidate` parser requires exact
-  input keys. Real Payload normalizes the collection data with optional
-  relationship state before this hook, causing an approved
-  `authUserId + subjectType + staff` create to fail as `unexpected-field`.
-- **Impact:** trusted services cannot create a PortalIdentity through the real
-  registered Payload Local API. After A15-H01 is repaired, bootstrap would be
-  blocked at this next operation.
-- **Repair owner:** Agent 6/13 PortalIdentity collection boundary.
-- **Required fix:** normalize and validate the approved Payload hook shape while
-  retaining zero-subject, dual-subject, mismatch, exact allowlist, and
-  immutability protections. Do not bypass the collection or relax database
-  constraints.
-- **Regression:**
-  `integration/payload-access/portal-identity-create.integration.test.ts`.
-
-### A15-M01 — Medium — readiness ignores Better Auth migration state
-
-- **Affected module:** operations readiness, coordinated with Agents 3 and 14.
-- **Root cause:** `checkPostgresReachable` receives only `DATABASE_URL` and checks
-  only the Payload ledger/operational contract. It does not inspect
-  `portal_auth.perfect_tax_auth_migrations`.
-- **Impact:** deployment readiness reports ready while the authentication schema
-  is not migration-ready.
-- **Repair owner:** operations readiness plus Better Auth database ownership.
-- **Required fix:** add a bounded, least-privilege Better Auth readiness contract
-  that can verify the exact required migration without granting the auth runtime
-  role DDL or Payload access and without emitting connection/migration details.
-- **Regression:** `integration/readiness/migration-readiness.integration.test.ts`.
-
-## Validation and reviewer handoff
-
-Run under pinned Node `24.18.0`, pnpm `10.33.0`, Payload `3.86.0`, Better Auth
-`1.6.23`, and PostgreSQL `17.10`. The exact harness and CI command are documented
-in `integration/README.md`.
-
-The final independent reviewer must first reproduce all three red regressions.
-After upstream repairs, re-prove the same expected-success assertions without
-fixture substitution, then extend bootstrap verification through first,
-second, concurrent, mandatory-success-audit, partial-failure, login,
-enrollment-only, and post-TOTP operational Owner states. The reviewer must also
-re-run unit/security regressions, all real PostgreSQL integration tests, real
-Next/Payload HTTP isolation, lint, typecheck, formatting, build, and
-`git diff --check`.
+Repository-wide `pnpm format:check` remains red only for the pre-existing Agent
+14 review document and `tsconfig.json`; neither file is changed by Agent 15.
+The default Turbopack `pnpm build` also reproduced the previously documented
+compile stall and was stopped before the supported webpack build passed.

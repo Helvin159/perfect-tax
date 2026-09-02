@@ -26,12 +26,10 @@ The required CI/deployment gate is:
 pnpm test:security:gate
 ```
 
-At commit time the gate is intentionally red. Expected-success regressions
-remain failing for A15-H01 (primary-owner bootstrap), A15-H02 (real
-PortalIdentity Local API creation), and A15-M01 (Better Auth migration
-readiness). Do not invert, skip, or weaken those assertions. The owning modules
-must repair the production behavior, after which these same tests must turn
-green.
+The suite includes expected-success regressions for repaired A15-H01
+(primary-owner bootstrap), A15-H02 (real PortalIdentity Local API creation),
+and A15-M01 (independent Better Auth migration readiness). Do not invert, skip,
+or weaken those assertions.
 
 Test ownership is split by boundary:
 
