@@ -7,6 +7,13 @@ migrations, public contact actions, metadata/PWA foundations, health endpoints,
 and focused security tests. Production portal authentication and sensitive
 client workflows remain intentionally deferred.
 
+The current Slice 1 security architecture and operator procedures are
+[documented here](docs/architecture/portal-identity-authorization.md), with
+[bootstrap](docs/operations/primary-owner-bootstrap.md),
+[deployment](docs/operations/database-migrations-and-deployment.md), and
+[security validation](docs/operations/security-validation.md) runbooks. These
+documents supersede older agent handoffs when they conflict.
+
 ## Prerequisites
 
 - Node.js `24.18.0`

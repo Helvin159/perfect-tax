@@ -144,3 +144,9 @@ for a registered Payload instance whose database verifies that contract. The
 historical “leave readiness closed” instruction above describes the pre-Agent-14
 handoff state. Agent 15 remains responsible for the real concurrent bootstrap
 and HTTP/end-to-end security proof.
+
+## Final-state note — 2026-09-02
+
+Agent 15 completed the required real concurrent/bootstrap and HTTP/end-to-end
+proof. This is historical implementation evidence; the authoritative operator
+procedure is `docs/operations/primary-owner-bootstrap.md`.

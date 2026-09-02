@@ -1,5 +1,13 @@
 # Revised Admin Portal Identity & Authorization Foundation
 
+> **Slice 1 final-state reconciliation (2026-09-02):** Agents 1–15 are merged
+> and their Agent 15 integration/security gate is complete. Agent 16's current
+> architecture and runbooks are ADR 0012,
+> `docs/architecture/portal-identity-authorization.md`, and `docs/operations/`.
+> This plan remains the implementation record. Its assignments, future-tense
+> acceptance criteria, and open decisions are historical unless explicitly
+> carried forward in those final documents. Slice 2 features remain deferred.
+
 ## A. Revision Summary
 
 This revision preserves the original separation of CMS, Staff, Client, ownership, assignment, Local API, migration, and review boundaries, while reducing the first implementation phase to a strong identity and authorization foundation.

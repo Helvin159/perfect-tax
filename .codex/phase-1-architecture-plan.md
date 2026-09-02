@@ -1,5 +1,11 @@
 # Phase 1 Architecture Plan: Client Services Portal
 
+> **Historical scope notice (2026-09-02):** This is the original Phase 1
+> architecture plan. Its statement that production portal authentication begins
+> in Phase 2 predates the merged Slice 1 identity foundation. For current Slice
+> 1 architecture, operations, and deferred work, use ADR 0012 and
+> `docs/architecture/portal-identity-authorization.md`.
+
 Date: 2026-07-18
 
 Internal application identifier: `client-services-portal`

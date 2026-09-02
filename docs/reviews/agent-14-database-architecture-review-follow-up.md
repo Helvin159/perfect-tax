@@ -90,18 +90,18 @@ Required proof:
 
 ## Important enforcement boundaries retained by Agent 14
 
-| Claim | Actual enforcement |
-|---|---|
-| At most one active primary owner | Database unique partial index, checks, trigger; application capability/preflight |
-| Owner demotion, disablement, unmarking, deletion | Database trigger and application hook |
-| Client-number format/uniqueness/immutability | Database check/index/trigger plus application generator/invariant hook |
-| PortalIdentity one-auth-user/one-subject shape | Database unique indexes, check, FKs; application invariant hook |
-| PortalIdentity update/delete | Runtime grants and database trigger; application denial hooks |
-| PortalIdentity binding provenance | Application only; runtime role may insert a structurally valid binding by design |
-| SecurityEvents append-only | Runtime grants and database trigger |
-| SecurityEvent action provenance/metadata semantics | Application only; database enforces vocabulary and structural shape |
-| Payload/Better Auth schema isolation | Separate schemas, owners, ledgers, and grants |
-| User-driven Payload operations | Application gateway requires `overrideAccess: false` and attested runtime capability |
+| Claim                                              | Actual enforcement                                                                   |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| At most one active primary owner                   | Database unique partial index, checks, trigger; application capability/preflight     |
+| Owner demotion, disablement, unmarking, deletion   | Database trigger and application hook                                                |
+| Client-number format/uniqueness/immutability       | Database check/index/trigger plus application generator/invariant hook               |
+| PortalIdentity one-auth-user/one-subject shape     | Database unique indexes, check, FKs; application invariant hook                      |
+| PortalIdentity update/delete                       | Runtime grants and database trigger; application denial hooks                        |
+| PortalIdentity binding provenance                  | Application only; runtime role may insert a structurally valid binding by design     |
+| SecurityEvents append-only                         | Runtime grants and database trigger                                                  |
+| SecurityEvent action provenance/metadata semantics | Application only; database enforces vocabulary and structural shape                  |
+| Payload/Better Auth schema isolation               | Separate schemas, owners, ledgers, and grants                                        |
+| User-driven Payload operations                     | Application gateway requires `overrideAccess: false` and attested runtime capability |
 
 ## Agent 15 assumptions and re-proofs
 
@@ -118,16 +118,16 @@ Agent 15 must independently prove:
 
 ## Validation evidence
 
-| Validation | Result |
-|---|---|
-| `pnpm lint` | Pass |
-| `pnpm typecheck` | Pass |
-| `pnpm format:check` | Pass |
-| Focused PostgreSQL migration tests | 2 files / 2 tests passed |
-| Full PostgreSQL-enabled test suite | 61 files / 533 tests passed |
-| Independent hostile SQL and concurrency matrix | Pass; expected database denials observed |
-| Webpack production build with build-only config | Pass |
-| Turbopack build | Stalled; not treated as a successful build |
+| Validation                                      | Result                                     |
+| ----------------------------------------------- | ------------------------------------------ |
+| `pnpm lint`                                     | Pass                                       |
+| `pnpm typecheck`                                | Pass                                       |
+| `pnpm format:check`                             | Pass                                       |
+| Focused PostgreSQL migration tests              | 2 files / 2 tests passed                   |
+| Full PostgreSQL-enabled test suite              | 61 files / 533 tests passed                |
+| Independent hostile SQL and concurrency matrix  | Pass; expected database denials observed   |
+| Webpack production build with build-only config | Pass                                       |
+| Turbopack build                                 | Stalled; not treated as a successful build |
 
 ## Final merge gate recorded by the review
 

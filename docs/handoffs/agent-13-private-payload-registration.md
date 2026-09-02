@@ -134,3 +134,9 @@ and readiness verifies ownership, constraints, triggers, grants, transaction
 append behavior, and the bootstrap lock. The historical pre-Agent-14 closure
 remains a record of the handoff state; Agent 15 still must provide the real HTTP
 and end-to-end attestation proof.
+
+## Final-state note — 2026-09-02
+
+Agent 15 completed the real HTTP/end-to-end proof. This handoff is retained as
+historical implementation evidence; use ADR 0012 and the Slice 1 architecture
+and operations documents for current instructions.

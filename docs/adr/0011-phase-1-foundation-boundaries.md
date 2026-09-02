@@ -1,5 +1,10 @@
 # ADR 0011: Phase 1 Foundation Boundaries
 
+> **Historical scope notice (2026-09-02):** This ADR records the Phase 1 public
+> foundation. Its statements that Better Auth and portal identity are absent are
+> superseded for Slice 1 by ADR 0012. It remains authoritative only for the
+> Phase 1 public/CMS decisions that ADR 0012 does not replace.
+
 - Status: Accepted
 - Date: 2026-07-18
 - Scope: Phase 1 Tasks 1-11

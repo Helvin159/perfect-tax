@@ -10,8 +10,21 @@ Use a dedicated PostgreSQL 17 test cluster and an administrator URL whose
 database name ends in `_test`:
 
 ```sh
-AGENT15_TEST_DATABASE_URL=postgresql://test-admin:<password>@127.0.0.1:5432/agent15_test \
-  pnpm test:integration:security
+docker run \
+  --name perfect-tax-agent15-postgres \
+  -e POSTGRES_USER=agent15 \
+  -e POSTGRES_PASSWORD='<local-test-password>' \
+  -e POSTGRES_DB=agent15_test \
+  -p 5432:5432 \
+  -d postgres:17.10-bookworm
+
+export AGENT15_TEST_DATABASE_URL='postgresql://agent15:<local-test-password>@127.0.0.1:5432/agent15_test'
+```
+
+```sh
+pnpm test:integration:security
+pnpm test:integration:database
+pnpm test:security:gate
 ```
 
 The URL is used only as an administrative base for randomly named databases.

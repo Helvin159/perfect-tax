@@ -9,6 +9,12 @@
 - Tested Better Auth version: `1.6.23`
 - Tested Payload version: `3.86.0`
 
+> **Final-state reconciliation (2026-09-02):** This ADR remains the historical
+> compatibility and bridge proof. Its original references to Better Auth being
+> absent, pre-Agent-14 readiness, or a future portal launch are not current
+> operational instructions. ADR 0012 and the linked Slice 1 runbooks are the
+> authoritative final architecture, migration, deployment, and deferral record.
+
 ## Decision
 
 **Go**, conditionally, with Better Auth `1.6.23` as the Phase 2 portal-authentication candidate. The spike proved that this exact release installs, typechecks, builds, migrates, rejects an untrusted-origin mutation, and reads a server-side session with the repository's pinned stack.
