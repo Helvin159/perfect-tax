@@ -17,7 +17,7 @@
     "dev": "next dev -p 3001",
     "build": "next build",
     "start": "next start",
-    "cms:bootstrap": "tsx src/modules/cms/bootstrap/cli.ts",
+    "cms:bootstrap": "node --conditions=react-server --import tsx src/modules/cms/bootstrap/cli.ts",
     "cms:generate:importmap": "node --conditions=react-server node_modules/payload/bin.js generate:importmap",
     "cms:generate:types": "node --conditions=react-server node_modules/payload/bin.js generate:types",
     "cms:migrate": "node --conditions=react-server node_modules/payload/bin.js migrate",
